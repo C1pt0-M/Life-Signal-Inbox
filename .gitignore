@@ -8,3 +8,4 @@ backend/data/*.db
 logs/
 .env
 .venv/
+/AGENTS.md
