@@ -5,6 +5,8 @@ import uuid
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from .ai_extractor import AIClient, AIExtractionError, extract_with_ai, get_configured_ai_client
+
 
 WEEKDAY_MAP = {
     "一": 0,
@@ -36,7 +38,24 @@ def build_context(
     }
 
 
-def extract_life_items(context: dict) -> dict:
+def extract_life_items(context: dict, ai_client: AIClient | None = None) -> dict:
+    client = ai_client or get_configured_ai_client()
+    if client:
+        try:
+            return extract_with_ai(context, client)
+        except AIExtractionError as exc:
+            result = _extract_life_items_with_rules(context)
+            result["json_debug"]["ai_fallback"] = {"reason": exc.code, "message": str(exc)}
+            return result
+        except Exception as exc:
+            result = _extract_life_items_with_rules(context)
+            result["json_debug"]["ai_fallback"] = {"reason": "ai_runtime_error", "message": str(exc)}
+            return result
+
+    return _extract_life_items_with_rules(context)
+
+
+def _extract_life_items_with_rules(context: dict) -> dict:
     raw_text = context["raw_text"]
     candidates = _split_candidates(raw_text)
     items = [_extract_one(candidate, context) for candidate in candidates]
@@ -243,4 +262,3 @@ def _infer_quadrant(start: datetime | None, current_date: str, confidence: float
     if days <= 7:
         return "important_not_urgent"
     return "not_important_not_urgent"
-
