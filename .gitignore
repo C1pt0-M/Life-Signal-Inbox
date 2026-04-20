@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 backend/data/history.json
+backend/data/*.db
 logs/
 .env
 .venv/

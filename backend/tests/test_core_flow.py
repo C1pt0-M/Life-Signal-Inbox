@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.extractor import build_context, extract_life_items
 from app.ics import build_ics
 from app.main import app
-from app.storage import JsonHistoryStore
+from app.storage import SQLiteHistoryStore
 from app.validator import validate_items
 
 
@@ -97,7 +97,7 @@ def test_build_ics_exports_calendar_event():
 
 
 def test_history_store_roundtrip(tmp_path):
-    store = JsonHistoryStore(tmp_path / "history.json")
+    store = SQLiteHistoryStore(tmp_path / "history.db")
     saved = store.save_items(
         [
             {
@@ -117,6 +117,32 @@ def test_history_store_roundtrip(tmp_path):
 
     assert saved[0]["title"] == "周末志愿者报名"
     assert store.list_items()[0]["id"] == "item-1"
+
+
+def test_sqlite_history_store_persists_across_instances(tmp_path):
+    db_path = tmp_path / "history.db"
+    first = SQLiteHistoryStore(db_path)
+    first.save_items(
+        [
+            {
+                "id": "item-1",
+                "title": "家长会确认参会",
+                "time": {"start": "2026-04-22T15:00:00+08:00", "end": "2026-04-22T16:00:00+08:00"},
+                "location": "学校礼堂",
+                "materials": ["学生手册"],
+                "contacts": [{"name": "王老师", "phone": "13800138000"}],
+                "confidence": 0.92,
+                "evidence": "家长群通知",
+                "source_type": "微信群",
+                "quadrant": "important_urgent",
+            }
+        ]
+    )
+
+    second = SQLiteHistoryStore(db_path)
+
+    assert second.list_items()[0]["title"] == "家长会确认参会"
+    assert second.list_items()[0]["materials"] == ["学生手册"]
 
 
 def test_config_endpoint_reports_ai_extractor_mode():
@@ -149,3 +175,30 @@ def test_validate_endpoint_rechecks_edited_items():
     assert response.json()["validation"]["score"] == 100
     assert response.json()["validation"]["pending_confirmations"] == []
 
+
+def test_todo_api_persists_items_in_sqlite_store(tmp_path, monkeypatch):
+    from app import main as main_module
+
+    test_store = SQLiteHistoryStore(tmp_path / "api-history.db")
+    monkeypatch.setattr(main_module, "store", test_store)
+    client = TestClient(app)
+    item = {
+        "id": "api-item-1",
+        "title": "课程作业提交",
+        "time": {"start": "2026-04-21T17:30:00+08:00", "end": "2026-04-21T18:00:00+08:00"},
+        "location": "学习平台",
+        "materials": ["论文PDF"],
+        "contacts": [{"name": "助教", "phone": ""}],
+        "confidence": 0.92,
+        "evidence": "4月21日17:30前提交",
+        "source_type": "课程通知",
+        "quadrant": "important_urgent",
+    }
+
+    save_response = client.post("/api/todos", json={"items": [item]})
+    history_response = client.get("/api/history")
+    ics_response = client.get("/api/export.ics")
+
+    assert save_response.status_code == 200
+    assert history_response.json()[0]["id"] == "api-item-1"
+    assert "SUMMARY:课程作业提交" in ics_response.text

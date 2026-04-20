@@ -12,12 +12,12 @@ from .ai_extractor import get_ai_config_status
 from .extractor import build_context, extract_life_items
 from .ics import build_ics
 from .ocr import extract_text_from_image
-from .storage import JsonHistoryStore
+from .storage import SQLiteHistoryStore
 from .validator import validate_items
 
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "history.json"
-store = JsonHistoryStore(DATA_PATH)
+DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "life_signal.db"
+store = SQLiteHistoryStore(DATA_PATH)
 
 app = FastAPI(title="Life Signal Inbox API")
 app.add_middleware(
