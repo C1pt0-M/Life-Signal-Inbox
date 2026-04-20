@@ -314,6 +314,13 @@ textarea {
   margin-bottom: 18px;
 }
 
+.manual-form.edit-form {
+  border: 1px solid #cddde8;
+  background: #f7fbfd;
+  border-radius: 8px;
+  padding: 14px;
+}
+
 .manual-form label {
   display: grid;
   gap: 6px;
@@ -341,6 +348,11 @@ textarea {
 .manual-grid {
   display: grid;
   grid-template-columns: 1.1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.form-actions {
+  display: flex;
   gap: 8px;
 }
 
@@ -379,13 +391,77 @@ textarea {
   gap: 12px;
 }
 
+.todo-section {
+  display: grid;
+  gap: 10px;
+}
+
+.todo-section + .todo-section {
+  margin-top: 18px;
+}
+
+.todo-section > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.todo-section h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.todo-section > header span,
+.section-empty {
+  color: var(--muted);
+}
+
+.section-empty {
+  border: 1px dashed #c9cbc4;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
 .task-row {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 14px;
   display: grid;
+  grid-template-columns: 34px 1fr;
   gap: 12px;
   background: #fff;
+}
+
+.task-row.completed {
+  background: #f8faf6;
+}
+
+.task-row.completed strong,
+.task-row.completed p,
+.task-row.completed dl {
+  color: #8a8f84;
+}
+
+.complete-toggle {
+  width: 24px;
+  height: 24px;
+  align-self: start;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  padding: 0;
+  border-color: #aebbad;
+  color: #fff;
+  background: #fff;
+  font-weight: 800;
+}
+
+.task-row.completed .complete-toggle {
+  background: var(--green);
+  border-color: var(--green);
 }
 
 .task-row strong {
@@ -416,6 +492,7 @@ dd {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  grid-column: 2;
 }
 
 .task-meta span,
@@ -436,6 +513,21 @@ dd {
 .task-meta em {
   color: var(--red);
   border-color: #f1cac5;
+}
+
+.task-row dl,
+.task-actions {
+  grid-column: 2;
+}
+
+.task-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.task-actions button {
+  padding: 7px 10px;
 }
 
 .validation-panel {

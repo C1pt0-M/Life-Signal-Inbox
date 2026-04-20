@@ -1,13 +1,16 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import confetti from "canvas-confetti";
 
 import {
   configureAi,
+  deleteTodo,
   exportIcs,
   extractNotice,
   getConfig,
   getHistory,
   getSamples,
   saveTodos,
+  updateTodo,
   uploadImageAndExtract,
   validateTodos,
 } from "./api.js";
@@ -15,6 +18,7 @@ import {
   applyQuadrantOverrides,
   buildAiConfigPayload,
   buildManualTodoItem,
+  buildTodoUpdate,
   calculateProgress,
   describeAiExtractor,
   formatAssistantExtraction,
@@ -24,6 +28,7 @@ import {
   QUADRANTS,
   serializeContacts,
   serializeMaterials,
+  splitTodoItems,
   updateEditableItem,
   updateQuadrantOverride,
 } from "./taskUtils.js";
@@ -60,6 +65,8 @@ export default function App() {
   const [draggedItemId, setDraggedItemId] = useState("");
   const [quadrantOverrides, setQuadrantOverrides] = useState(loadQuadrantOverrides);
   const [manualForm, setManualForm] = useState(DEFAULT_MANUAL_FORM);
+  const [editingTodo, setEditingTodo] = useState(null);
+  const [editForm, setEditForm] = useState(DEFAULT_MANUAL_FORM);
   const [appConfig, setAppConfig] = useState(null);
   const [aiConfigOpen, setAiConfigOpen] = useState(false);
   const [aiConfigMessage, setAiConfigMessage] = useState("");
@@ -202,6 +209,56 @@ export default function App() {
       const item = buildManualTodoItem(manualForm, { timezone: "Asia/Shanghai" });
       await saveTodos([item]);
       setManualForm((current) => ({ ...DEFAULT_MANUAL_FORM, date: current.date }));
+      await refreshHistory();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  function startEditTodo(item) {
+    setEditingTodo(item);
+    setEditForm(todoToForm(item));
+  }
+
+  async function handleEditSubmit(event) {
+    event.preventDefault();
+    if (!editingTodo) return;
+    setIsLoading(true);
+    setError("");
+    try {
+      await updateTodo(buildTodoUpdate(editingTodo, editForm));
+      setEditingTodo(null);
+      await refreshHistory();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleToggleTodo(item) {
+    const nextStatus = item.status === "done" ? "todo" : "done";
+    setIsLoading(true);
+    setError("");
+    try {
+      await updateTodo({ ...item, status: nextStatus });
+      await refreshHistory();
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleDeleteTodo(item) {
+    setIsLoading(true);
+    setError("");
+    try {
+      await deleteTodo(item.id);
       await refreshHistory();
     } catch (err) {
       setError(err.message);
@@ -364,6 +421,14 @@ export default function App() {
             history={history}
             isLoading={isLoading}
             onManualSubmit={handleManualSubmit}
+            editingTodo={editingTodo}
+            editForm={editForm}
+            setEditForm={setEditForm}
+            onEditSubmit={handleEditSubmit}
+            onCancelEdit={() => setEditingTodo(null)}
+            onToggleTodo={handleToggleTodo}
+            onEditTodo={startEditTodo}
+            onDeleteTodo={handleDeleteTodo}
             onSave={handleSave}
             onExport={exportIcs}
             onJson={() => setJsonOpen(true)}
@@ -421,6 +486,22 @@ export default function App() {
   );
 }
 
+function todoToForm(item) {
+  const start = item.time?.start || "";
+  const end = item.time?.end || "";
+  return {
+    title: item.title || "",
+    date: start ? start.slice(0, 10) : todayInputValue(),
+    startTime: start ? start.slice(11, 16) : "09:00",
+    endTime: end ? end.slice(11, 16) : "10:00",
+    recurrence: item.recurrence?.type || "none",
+    location: item.location || "",
+    notes: item.notes || "",
+    quadrant: item.quadrant || "important_not_urgent",
+    status: item.status || "todo",
+  };
+}
+
 function loadQuadrantOverrides() {
   try {
     const raw = window.localStorage.getItem(QUADRANT_STORAGE_KEY);
@@ -431,7 +512,8 @@ function loadQuadrantOverrides() {
 }
 
 function TodoPage(props) {
-  const allItems = [...(props.result?.items || []), ...props.history];
+  const allItems = props.history;
+  const sections = splitTodoItems(allItems);
   return (
     <div className="page-stack">
       <header className="page-top">
@@ -460,6 +542,15 @@ function TodoPage(props) {
             isLoading={props.isLoading}
             onSubmit={props.onManualSubmit}
           />
+          {props.editingTodo && (
+            <EditTodoForm
+              form={props.editForm}
+              setForm={props.setEditForm}
+              isLoading={props.isLoading}
+              onSubmit={props.onEditSubmit}
+              onCancel={props.onCancelEdit}
+            />
+          )}
           {props.result?.ocr && <OcrSummary ocr={props.result.ocr} />}
           {props.result && <ValidationPanel result={props.result} />}
           {props.result && (
@@ -486,11 +577,48 @@ function TodoPage(props) {
             <button onClick={props.onJson}>查看 JSON</button>
           </div>
           <div className="todo-list">
-            {allItems.length ? allItems.map((item) => <TaskRow key={item.id} item={item} />) : <EmptyState />}
+            {allItems.length ? (
+              <>
+                <TodoSection
+                  title="待完成"
+                  items={sections.pending}
+                  emptyText="没有待完成事项。"
+                  onToggle={props.onToggleTodo}
+                  onEdit={props.onEditTodo}
+                  onDelete={props.onDeleteTodo}
+                />
+                <TodoSection
+                  title="已完成"
+                  items={sections.completed}
+                  emptyText="完成事项会显示在这里。"
+                  onToggle={props.onToggleTodo}
+                  onEdit={props.onEditTodo}
+                  onDelete={props.onDeleteTodo}
+                />
+              </>
+            ) : (
+              <EmptyState text="还没有事项。先手动添加一个待办。" />
+            )}
           </div>
         </div>
       </section>
     </div>
+  );
+}
+
+function TodoSection({ title, items, emptyText, onToggle, onEdit, onDelete }) {
+  return (
+    <section className="todo-section">
+      <header>
+        <h3>{title}</h3>
+        <span>{items.length} 项</span>
+      </header>
+      {items.length ? (
+        items.map((item) => <TaskRow key={item.id} item={item} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete} />)
+      ) : (
+        <div className="section-empty">{emptyText}</div>
+      )}
+    </section>
   );
 }
 
@@ -553,6 +681,74 @@ function ManualTodoForm({ form, setForm, isLoading, onSubmit }) {
       <button className="primary" type="submit" disabled={isLoading}>
         {isLoading ? "保存中..." : "加入待办清单"}
       </button>
+    </form>
+  );
+}
+
+function EditTodoForm({ form, setForm, isLoading, onSubmit, onCancel }) {
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  return (
+    <form className="manual-form edit-form" onSubmit={onSubmit}>
+      <div className="section-title">
+        <h2>修改待办</h2>
+        <span>保存后同步到清单</span>
+      </div>
+      <label className="wide">
+        事件
+        <input value={form.title} onChange={(event) => update("title", event.target.value)} />
+      </label>
+      <div className="manual-grid">
+        <label>
+          日期
+          <input type="date" value={form.date} onChange={(event) => update("date", event.target.value)} />
+        </label>
+        <label>
+          开始
+          <input type="time" value={form.startTime} onChange={(event) => update("startTime", event.target.value)} />
+        </label>
+        <label>
+          结束
+          <input type="time" value={form.endTime} onChange={(event) => update("endTime", event.target.value)} />
+        </label>
+      </div>
+      <label className="wide">
+        是否重复
+        <select value={form.recurrence} onChange={(event) => update("recurrence", event.target.value)}>
+          <option value="none">不重复</option>
+          <option value="daily">每天这个时段</option>
+          <option value="weekdays">每个工作日</option>
+          <option value="holidays">每个节假日（初版按周末）</option>
+        </select>
+      </label>
+      <label className="wide">
+        地点
+        <input value={form.location} onChange={(event) => update("location", event.target.value)} />
+      </label>
+      <label className="wide">
+        备注
+        <textarea value={form.notes} onChange={(event) => update("notes", event.target.value)} />
+      </label>
+      <label className="wide">
+        四象限
+        <select value={form.quadrant} onChange={(event) => update("quadrant", event.target.value)}>
+          {Object.entries(QUADRANTS).map(([key, meta]) => (
+            <option key={key} value={key}>
+              {meta.title}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="form-actions">
+        <button className="primary" type="submit" disabled={isLoading}>
+          {isLoading ? "保存中..." : "保存修改"}
+        </button>
+        <button type="button" onClick={onCancel}>
+          取消
+        </button>
+      </div>
     </form>
   );
 }
@@ -724,12 +920,28 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
   );
 }
 
-function TaskRow({ item }) {
+function TaskRow({ item, onToggle, onEdit, onDelete }) {
+  const completeButtonRef = useRef(null);
   const missing = [];
   if (!item.location) missing.push("缺地点");
   const note = item.notes || (item.materials?.length ? `材料：${item.materials.join("、")}` : "");
+
+  async function handleToggleClick() {
+    const shouldReward = item.status !== "done";
+    if (shouldReward) fireLocalReward(completeButtonRef.current);
+    await onToggle(item);
+  }
+
   return (
-    <article className="task-row">
+    <article className={`task-row ${item.status === "done" ? "completed" : ""}`}>
+      <button
+        ref={completeButtonRef}
+        className="complete-toggle"
+        aria-label={item.status === "done" ? "取消完成" : "标记完成"}
+        onClick={handleToggleClick}
+      >
+        {item.status === "done" ? "✓" : ""}
+      </button>
       <div>
         <strong>{item.title}</strong>
         <p>{item.evidence}</p>
@@ -758,6 +970,10 @@ function TaskRow({ item }) {
         {missing.map((chip) => (
           <em key={chip}>{chip}</em>
         ))}
+      </div>
+      <div className="task-actions">
+        <button onClick={() => onEdit(item)}>修改</button>
+        <button onClick={() => onDelete(item)}>删除</button>
       </div>
     </article>
   );
@@ -795,4 +1011,21 @@ function OcrSummary({ ocr }) {
 
 function EmptyState({ text = "还没有事项。先粘贴一条通知，或选择演示样例。" }) {
   return <div className="empty-state">{text}</div>;
+}
+
+function fireLocalReward(target) {
+  if (!target) return;
+  const rect = target.getBoundingClientRect();
+  const x = (rect.left + rect.width / 2) / window.innerWidth;
+  const y = (rect.top + rect.height / 2) / window.innerHeight;
+  confetti({
+    particleCount: 18,
+    spread: 42,
+    startVelocity: 18,
+    ticks: 90,
+    scalar: 0.65,
+    origin: { x, y },
+    colors: ["#267a57", "#d9a927", "#2d6f9f", "#f3f7ef"],
+    disableForReducedMotion: true,
+  });
 }

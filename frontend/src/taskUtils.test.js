@@ -7,8 +7,10 @@ import {
   describeAiExtractor,
   buildAiConfigPayload,
   buildManualTodoItem,
+  buildTodoUpdate,
   formatAssistantExtraction,
   groupByQuadrant,
+  splitTodoItems,
   serializeContacts,
   serializeMaterials,
   updateEditableItem,
@@ -141,6 +143,52 @@ test("buildManualTodoItem creates structured todo with recurrence and notes", ()
   assert.equal(item.quadrant, "important_urgent");
   assert.equal(item.source_type, "手动添加");
   assert.equal(item.confidence, 1);
+});
+
+test("splitTodoItems separates pending and completed items", () => {
+  const grouped = splitTodoItems([
+    { id: "1", status: "todo" },
+    { id: "2", status: "done" },
+    { id: "3" },
+  ]);
+
+  assert.deepEqual(grouped.pending.map((item) => item.id), ["1", "3"]);
+  assert.deepEqual(grouped.completed.map((item) => item.id), ["2"]);
+});
+
+test("buildTodoUpdate edits fields and toggles completion", () => {
+  const item = buildTodoUpdate(
+    {
+      id: "todo-1",
+      title: "旧事件",
+      time: { start: "2026-04-21T09:00:00+08:00", end: "2026-04-21T10:00:00+08:00", label: "" },
+      location: "旧地点",
+      notes: "",
+      recurrence: { type: "none", label: "不重复", rrule: "" },
+      quadrant: "important_not_urgent",
+      status: "todo",
+    },
+    {
+      title: "新事件",
+      date: "2026-04-22",
+      startTime: "13:30",
+      endTime: "14:30",
+      recurrence: "daily",
+      location: "新地点",
+      notes: "带资料",
+      quadrant: "important_urgent",
+      status: "done",
+    }
+  );
+
+  assert.equal(item.title, "新事件");
+  assert.equal(item.time.start, "2026-04-22T13:30:00+08:00");
+  assert.equal(item.time.end, "2026-04-22T14:30:00+08:00");
+  assert.equal(item.recurrence.label, "每天");
+  assert.equal(item.location, "新地点");
+  assert.equal(item.notes, "带资料");
+  assert.equal(item.quadrant, "important_urgent");
+  assert.equal(item.status, "done");
 });
 
 test("updateEditableItem updates nested editable fields", () => {

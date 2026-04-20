@@ -44,6 +44,20 @@ export function saveTodos(items) {
   });
 }
 
+export function updateTodo(item) {
+  return request(`/api/todos/${encodeURIComponent(item.id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item }),
+  });
+}
+
+export function deleteTodo(itemId) {
+  return request(`/api/todos/${encodeURIComponent(itemId)}`, {
+    method: "DELETE",
+  });
+}
+
 export function validateTodos(items) {
   return request("/api/validate", {
     method: "POST",

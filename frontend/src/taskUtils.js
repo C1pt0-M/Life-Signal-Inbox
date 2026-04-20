@@ -96,6 +96,34 @@ export function buildManualTodoItem(form, options = {}) {
   };
 }
 
+export function buildTodoUpdate(item, form) {
+  const recurrence = buildRecurrence(form.recurrence || item.recurrence?.type);
+  const start = buildIsoDateTime(form.date, form.startTime);
+  const end = buildIsoDateTime(form.date, form.endTime || form.startTime);
+  return {
+    ...item,
+    title: String(form.title ?? item.title ?? "").trim(),
+    time: {
+      ...(item.time || {}),
+      start: start || item.time?.start || "",
+      end: end || item.time?.end || start || "",
+      label: buildManualTimeLabel(form, recurrence),
+    },
+    location: String(form.location ?? item.location ?? "").trim(),
+    notes: String(form.notes ?? item.notes ?? "").trim(),
+    recurrence,
+    quadrant: QUADRANTS[form.quadrant] ? form.quadrant : item.quadrant || "important_not_urgent",
+    status: form.status || item.status || "todo",
+  };
+}
+
+export function splitTodoItems(items) {
+  return {
+    pending: items.filter((item) => item.status !== "done"),
+    completed: items.filter((item) => item.status === "done"),
+  };
+}
+
 function buildRecurrence(type = "none") {
   const rules = {
     none: { type: "none", label: "不重复", rrule: "" },

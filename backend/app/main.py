@@ -41,6 +41,10 @@ class SaveRequest(BaseModel):
     items: list[dict]
 
 
+class TodoUpdateRequest(BaseModel):
+    item: dict
+
+
 class ValidateRequest(BaseModel):
     items: list[dict]
     historical_items: list[dict] | None = None
@@ -121,6 +125,20 @@ def save_todos(request: SaveRequest) -> dict:
     saved = store.save_items(request.items)
     validation = validate_items(saved, store.list_items())
     return {"saved": saved, "validation": validation}
+
+
+@app.patch("/api/todos/{item_id}")
+def update_todo(item_id: str, request: TodoUpdateRequest) -> dict:
+    item = {**request.item, "id": item_id}
+    saved = store.save_items([item])
+    validation = validate_items(saved, store.list_items())
+    return {"saved": saved[0], "validation": validation}
+
+
+@app.delete("/api/todos/{item_id}")
+def delete_todo(item_id: str) -> dict:
+    deleted = store.delete_item(item_id)
+    return {"deleted": deleted, "id": item_id}
 
 
 @app.post("/api/validate")

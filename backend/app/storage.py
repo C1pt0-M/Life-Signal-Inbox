@@ -66,6 +66,12 @@ class SQLiteHistoryStore:
             conn.commit()
         return saved
 
+    def delete_item(self, item_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM history_items WHERE id = ?", (item_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.execute(
