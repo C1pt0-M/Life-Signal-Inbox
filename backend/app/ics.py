@@ -29,6 +29,17 @@ def build_ics(items: list[dict], generated_at: datetime | None = None) -> str:
         recurrence_rule = (item.get("recurrence") or {}).get("rrule")
         if recurrence_rule:
             event_lines.append(f"RRULE:{recurrence_rule}")
+        reminder = _reminder_minutes(item)
+        if reminder:
+            event_lines.extend(
+                [
+                    "BEGIN:VALARM",
+                    f"TRIGGER:-PT{reminder}M",
+                    "ACTION:DISPLAY",
+                    f"DESCRIPTION:{_escape(item.get('title', '待处理生活事项'))}",
+                    "END:VALARM",
+                ]
+            )
         event_lines.extend(
             [
                 f"DESCRIPTION:{_escape(_description(item))}",
@@ -60,15 +71,25 @@ def _description(item: dict) -> str:
     contacts = "、".join(contact.get("name", "") for contact in item.get("contacts") or [])
     recurrence = (item.get("recurrence") or {}).get("label", "")
     notes = item.get("notes", "")
+    reminder = (item.get("reminder") or {}).get("label", "")
     return (
         f"来源：{item.get('source_type', '')}\\n"
         f"重复：{recurrence or '不重复'}\\n"
+        f"提醒：{reminder or '不提醒'}\\n"
         f"备注：{notes or '无'}\\n"
         f"材料：{materials or '待确认'}\\n"
         f"联系人：{contacts or '待确认'}\\n"
         f"可信度：{round(float(item.get('confidence') or 0) * 100)}%\\n"
         f"原文依据：{item.get('evidence', '')}"
     )
+
+
+def _reminder_minutes(item: dict) -> int:
+    try:
+        minutes = int((item.get("reminder") or {}).get("minutes_before") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(minutes, 0)
 
 
 def _escape(value: str) -> str:

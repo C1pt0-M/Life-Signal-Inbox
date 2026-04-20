@@ -147,7 +147,7 @@ def _build_course_item(
         "location": location,
         "materials": [],
         "contacts": [],
-        "notes": "由课表截图 OCR 生成，具体节次请核对原图。",
+        "notes": "具体节次请核对原图。",
         "evidence": text,
         "source_type": context["source_type"],
         "confidence": 0.72 if float(ocr_result.get("confidence") or 0) >= 0.5 else 0.6,

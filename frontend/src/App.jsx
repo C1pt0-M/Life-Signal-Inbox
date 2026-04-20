@@ -15,26 +15,33 @@ import {
   validateTodos,
 } from "./api.js";
 import {
-  applyQuadrantOverrides,
   buildAiConfigPayload,
+  buildCalendarMonth,
+  buildExtractionPayload,
   buildManualTodoItem,
+  buildSaveableAssistantItems,
   buildTodoUpdate,
   calculateProgress,
+  calculateTodoOverview,
   describeAiExtractor,
+  expandCalendarItems,
+  filterTodoItems,
   formatAssistantExtraction,
   formatDateTime,
   formatFullNow,
+  getCalendarDayItems,
+  getDueReminders,
+  getImageFileFromClipboardEvent,
   groupByQuadrant,
   QUADRANTS,
   serializeContacts,
   serializeMaterials,
   splitTodoItems,
+  todayInTimezone,
   updateEditableItem,
-  updateQuadrantOverride,
 } from "./taskUtils.js";
 
 const SOURCE_TYPES = ["微信群", "短信", "课程通知", "社区公告", "报名信息", "截图文字"];
-const QUADRANT_STORAGE_KEY = "life-signal-inbox-quadrants";
 const DEFAULT_MANUAL_FORM = {
   title: "",
   date: todayInputValue(),
@@ -43,11 +50,31 @@ const DEFAULT_MANUAL_FORM = {
   recurrence: "none",
   location: "",
   notes: "",
+  reminder: "0",
   quadrant: "important_not_urgent",
+};
+const REMINDER_OPTIONS = [
+  { value: "0", label: "不提醒" },
+  { value: "5", label: "提前5分钟" },
+  { value: "15", label: "提前15分钟" },
+  { value: "30", label: "提前30分钟" },
+  { value: "60", label: "提前1小时" },
+  { value: "1440", label: "提前1天" },
+];
+const DEFAULT_TODO_FILTERS = {
+  query: "",
+  status: "all",
+  quadrant: "all",
+  timeScope: "all",
 };
 
 function todayInputValue() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+  return todayInTimezone();
+}
+
+function currentCalendarCursor() {
+  const now = new Date();
+  return { year: now.getFullYear(), month: now.getMonth() + 1 };
 }
 
 export default function App() {
@@ -62,11 +89,16 @@ export default function App() {
   const [jsonOpen, setJsonOpen] = useState(false);
   const [error, setError] = useState("");
   const [selectedDate, setSelectedDate] = useState("2026-04-20");
+  const [calendarCursor, setCalendarCursor] = useState(() => currentCalendarCursor());
+  const [selectedCalendarEntry, setSelectedCalendarEntry] = useState(null);
+  const [calendarEditMode, setCalendarEditMode] = useState(false);
+  const [todoFilters, setTodoFilters] = useState(DEFAULT_TODO_FILTERS);
   const [draggedItemId, setDraggedItemId] = useState("");
-  const [quadrantOverrides, setQuadrantOverrides] = useState(loadQuadrantOverrides);
   const [manualForm, setManualForm] = useState(DEFAULT_MANUAL_FORM);
   const [editingTodo, setEditingTodo] = useState(null);
   const [editForm, setEditForm] = useState(DEFAULT_MANUAL_FORM);
+  const [activeReminder, setActiveReminder] = useState(null);
+  const [seenReminderKeys, setSeenReminderKeys] = useState(() => new Set());
   const [appConfig, setAppConfig] = useState(null);
   const [aiConfigOpen, setAiConfigOpen] = useState(false);
   const [aiConfigMessage, setAiConfigMessage] = useState("");
@@ -94,15 +126,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(QUADRANT_STORAGE_KEY, JSON.stringify(quadrantOverrides));
-  }, [quadrantOverrides]);
+    const checkReminders = () => {
+      const due = getDueReminders(history, new Date(), seenReminderKeys);
+      if (!due.length) return;
+      const [next] = due;
+      setActiveReminder(next);
+      setSeenReminderKeys((current) => new Set([...current, next.reminder_key]));
+    };
+    checkReminders();
+    const timer = window.setInterval(checkReminders, 30_000);
+    return () => window.clearInterval(timer);
+  }, [history, seenReminderKeys]);
 
   const visibleItems = useMemo(
-    () => applyQuadrantOverrides([...(result?.items || []), ...history], quadrantOverrides),
-    [result, history, quadrantOverrides]
+    () => [...(result?.items || []), ...history],
+    [result, history]
   );
   const progress = calculateProgress(history);
+  const todoOverview = useMemo(() => calculateTodoOverview(history, now), [history, now]);
+  const filteredHistory = useMemo(() => filterTodoItems(history, todoFilters, now), [history, todoFilters, now]);
   const grouped = groupByQuadrant(visibleItems);
+  const calendarDays = useMemo(() => buildCalendarMonth(calendarCursor.year, calendarCursor.month), [calendarCursor]);
+  const calendarEntries = useMemo(
+    () => expandCalendarItems(history, calendarDays[0]?.iso, calendarDays[calendarDays.length - 1]?.iso),
+    [history, calendarDays]
+  );
 
   async function refreshHistory() {
     try {
@@ -151,12 +199,7 @@ export default function App() {
     setIsLoading(true);
     setError("");
     try {
-      const data = await extractNotice({
-        text,
-        source_type: sourceType,
-        current_date: "2026-04-19",
-        timezone: "Asia/Shanghai",
-      });
+      const data = await extractNotice(buildExtractionPayload(text, sourceType));
       setResult(data);
       if (fromAssistant) {
         const stamp = Date.now();
@@ -186,6 +229,32 @@ export default function App() {
       setResult(null);
       setInput("");
       await refreshHistory();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleAssistantSave() {
+    if (!result?.items?.length) return;
+    setIsLoading(true);
+    setError("");
+    try {
+      const items = buildSaveableAssistantItems(result.items);
+      await saveTodos(items);
+      await refreshHistory();
+      const stamp = Date.now();
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-save-${stamp}`,
+          role: "assistant",
+          text: `已加入待办清单：${items.length} 个事项。`,
+        },
+      ]);
+      setResult(null);
+      setInput("");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -238,6 +307,23 @@ export default function App() {
     }
   }
 
+  async function handleCalendarEditSubmit(event) {
+    event.preventDefault();
+    if (!selectedCalendarEntry) return;
+    setIsLoading(true);
+    setError("");
+    try {
+      await updateTodo(buildTodoUpdate(selectedCalendarEntry.item, editForm));
+      setCalendarEditMode(false);
+      setSelectedCalendarEntry(null);
+      await refreshHistory();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   async function handleToggleTodo(item) {
     const nextStatus = item.status === "done" ? "todo" : "done";
     setIsLoading(true);
@@ -267,6 +353,33 @@ export default function App() {
     }
   }
 
+  async function handleCalendarToggle(item) {
+    await handleToggleTodo(item);
+    setSelectedCalendarEntry(null);
+  }
+
+  async function handleCalendarDelete(item) {
+    await handleDeleteTodo(item);
+    setSelectedCalendarEntry(null);
+  }
+
+  function handleCalendarEdit(item) {
+    setEditForm(todoToForm(item));
+    setCalendarEditMode(true);
+  }
+
+  function closeCalendarDetail() {
+    setSelectedCalendarEntry(null);
+    setCalendarEditMode(false);
+  }
+
+  function shiftCalendarMonth(offset) {
+    setCalendarCursor((current) => {
+      const next = new Date(current.year, current.month - 1 + offset, 1);
+      return { year: next.getFullYear(), month: next.getMonth() + 1 };
+    });
+  }
+
   function handleEditItem(itemId, patch) {
     setResult((current) => {
       if (!current) return current;
@@ -293,15 +406,14 @@ export default function App() {
     }
   }
 
-  async function handleUpload(event, target = "input") {
-    const file = event.target.files?.[0];
+  async function handleImageFile(file, target = "assistant") {
     if (!file) return;
     setIsLoading(true);
     setError("");
     try {
       const data = await uploadImageAndExtract(file, {
         source_type: "截图文字",
-        current_date: "2026-04-19",
+        current_date: todayInTimezone(),
         timezone: "Asia/Shanghai",
       });
       const extractedText = data.ocr?.text || "";
@@ -324,9 +436,21 @@ export default function App() {
     } catch (err) {
       setError(err.message);
     } finally {
-      event.target.value = "";
       setIsLoading(false);
     }
+  }
+
+  async function handleUpload(event, target = "assistant") {
+    const file = event.target.files?.[0];
+    await handleImageFile(file, target);
+    event.target.value = "";
+  }
+
+  async function handleAssistantPaste(event) {
+    const file = getImageFileFromClipboardEvent(event);
+    if (!file) return;
+    event.preventDefault();
+    await handleImageFile(file, "assistant");
   }
 
   function applySample(sample) {
@@ -335,9 +459,28 @@ export default function App() {
     setActivePage("todos");
   }
 
-  function moveItemToQuadrant(itemId, quadrant) {
-    setQuadrantOverrides((current) => updateQuadrantOverride(current, itemId, quadrant));
+  async function moveItemToQuadrant(itemId, quadrant) {
+    const item = visibleItems.find((candidate) => candidate.id === itemId);
+    if (!item) return;
     setDraggedItemId("");
+    if (item.source_type !== "手动添加" && result?.items?.some((candidate) => candidate.id === itemId)) {
+      setResult((current) => {
+        if (!current) return current;
+        const items = current.items.map((candidate) => (candidate.id === itemId ? { ...candidate, quadrant } : candidate));
+        return { ...current, items, context: current.context ? { ...current.context, recognized_items: items } : current.context };
+      });
+      return;
+    }
+    setIsLoading(true);
+    setError("");
+    try {
+      await updateTodo({ ...item, quadrant });
+      await refreshHistory();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -356,6 +499,9 @@ export default function App() {
           </button>
           <button className={activePage === "quadrants" ? "active" : ""} onClick={() => setActivePage("quadrants")}>
             四象限规划
+          </button>
+          <button className={activePage === "calendar" ? "active" : ""} onClick={() => setActivePage("calendar")}>
+            日历总览
           </button>
           <button className={activePage === "assistant" ? "active" : ""} onClick={() => setActivePage("assistant")}>
             AI 助手
@@ -415,10 +561,14 @@ export default function App() {
           <TodoPage
             now={now}
             progress={progress}
+            overview={todoOverview}
+            filters={todoFilters}
+            setFilters={setTodoFilters}
             manualForm={manualForm}
             setManualForm={setManualForm}
             result={result}
-            history={history}
+            history={filteredHistory}
+            totalCount={history.length}
             isLoading={isLoading}
             onManualSubmit={handleManualSubmit}
             editingTodo={editingTodo}
@@ -447,6 +597,20 @@ export default function App() {
             onMoveItem={moveItemToQuadrant}
           />
         )}
+        {activePage === "calendar" && (
+          <CalendarPage
+            cursor={calendarCursor}
+            days={calendarDays}
+            entries={calendarEntries}
+            onPreviousMonth={() => shiftCalendarMonth(-1)}
+            onNextMonth={() => shiftCalendarMonth(1)}
+            onToday={() => setCalendarCursor(currentCalendarCursor())}
+            onSelectEntry={(entry) => {
+              setSelectedCalendarEntry(entry);
+              setCalendarEditMode(false);
+            }}
+          />
+        )}
         {activePage === "assistant" && (
           <AssistantPage
             messages={messages}
@@ -456,9 +620,26 @@ export default function App() {
             isLoading={isLoading}
             onSend={() => handleExtract(input, true)}
             onUpload={(event) => handleUpload(event, "assistant")}
+            onPaste={handleAssistantPaste}
+            onSave={handleAssistantSave}
           />
         )}
       </section>
+      {activeReminder && <ReminderToast item={activeReminder} onClose={() => setActiveReminder(null)} />}
+      {selectedCalendarEntry && (
+        <CalendarDetailModal
+          entry={selectedCalendarEntry}
+          editMode={calendarEditMode}
+          editForm={editForm}
+          setEditForm={setEditForm}
+          isLoading={isLoading}
+          onClose={closeCalendarDetail}
+          onToggle={() => handleCalendarToggle(selectedCalendarEntry.item)}
+          onEdit={() => handleCalendarEdit(selectedCalendarEntry.item)}
+          onEditSubmit={handleCalendarEditSubmit}
+          onDelete={() => handleCalendarDelete(selectedCalendarEntry.item)}
+        />
+      )}
 
       {jsonOpen && (
         <div
@@ -495,20 +676,12 @@ function todoToForm(item) {
     startTime: start ? start.slice(11, 16) : "09:00",
     endTime: end ? end.slice(11, 16) : "10:00",
     recurrence: item.recurrence?.type || "none",
+    reminder: String(item.reminder?.minutes_before ?? 0),
     location: item.location || "",
     notes: item.notes || "",
     quadrant: item.quadrant || "important_not_urgent",
     status: item.status || "todo",
   };
-}
-
-function loadQuadrantOverrides() {
-  try {
-    const raw = window.localStorage.getItem(QUADRANT_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
 }
 
 function TodoPage(props) {
@@ -520,7 +693,6 @@ function TodoPage(props) {
         <div>
           <span className="eyebrow">当前时间</span>
           <h1>{formatFullNow(props.now)}</h1>
-          <p>Asia/Shanghai</p>
         </div>
         <div className="progress-box">
           <span>今日完成</span>
@@ -565,10 +737,12 @@ function TodoPage(props) {
         </div>
 
         <div className="todo-panel">
+          <TodoOverview overview={props.overview} activeScope={props.filters.timeScope} setFilters={props.setFilters} />
           <div className="section-title">
             <h2>待办事项</h2>
-            <span>{allItems.length} 个生活信号</span>
+            <span>{allItems.length}/{props.totalCount} 个生活信号</span>
           </div>
+          <TodoFilterBar filters={props.filters} setFilters={props.setFilters} />
           <div className="toolbar">
             <button onClick={props.onSave} disabled={!props.result?.items?.length}>
               加入待办清单
@@ -603,6 +777,62 @@ function TodoPage(props) {
         </div>
       </section>
     </div>
+  );
+}
+
+function TodoOverview({ overview, activeScope, setFilters }) {
+  const cards = [
+    { key: "today", label: "今天", value: overview.today },
+    { key: "overdue", label: "逾期", value: overview.overdue },
+    { key: "week", label: "本周", value: overview.week },
+    { key: "no_time", label: "无时间", value: overview.noTime },
+  ];
+  return (
+    <section className="todo-overview">
+      {cards.map((card) => (
+        <button
+          className={activeScope === card.key ? "active" : ""}
+          key={card.key}
+          onClick={() => setFilters((current) => ({ ...current, timeScope: current.timeScope === card.key ? "all" : card.key }))}
+        >
+          <span>{card.label}</span>
+          <strong>{card.value}</strong>
+        </button>
+      ))}
+    </section>
+  );
+}
+
+function TodoFilterBar({ filters, setFilters }) {
+  function update(field, value) {
+    setFilters((current) => ({ ...current, [field]: value }));
+  }
+
+  return (
+    <section className="todo-filter-bar">
+      <input value={filters.query} placeholder="搜索事件、地点、备注" onChange={(event) => update("query", event.target.value)} />
+      <select value={filters.status} onChange={(event) => update("status", event.target.value)}>
+        <option value="all">全部状态</option>
+        <option value="todo">待完成</option>
+        <option value="done">已完成</option>
+      </select>
+      <select value={filters.quadrant} onChange={(event) => update("quadrant", event.target.value)}>
+        <option value="all">全部象限</option>
+        {Object.entries(QUADRANTS).map(([key, meta]) => (
+          <option key={key} value={key}>
+            {meta.title}
+          </option>
+        ))}
+      </select>
+      <select value={filters.timeScope} onChange={(event) => update("timeScope", event.target.value)}>
+        <option value="all">全部时间</option>
+        <option value="today">今天</option>
+        <option value="overdue">逾期</option>
+        <option value="week">本周</option>
+        <option value="no_time">无时间</option>
+      </select>
+      <button onClick={() => setFilters(DEFAULT_TODO_FILTERS)}>重置</button>
+    </section>
   );
 }
 
@@ -658,6 +888,16 @@ function ManualTodoForm({ form, setForm, isLoading, onSubmit }) {
           <option value="daily">每天这个时段</option>
           <option value="weekdays">每个工作日</option>
           <option value="holidays">每个节假日（初版按周末）</option>
+        </select>
+      </label>
+      <label className="wide">
+        提前提醒
+        <select value={form.reminder || "0"} onChange={(event) => update("reminder", event.target.value)}>
+          {REMINDER_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
         </select>
       </label>
       <label className="wide">
@@ -721,6 +961,16 @@ function EditTodoForm({ form, setForm, isLoading, onSubmit, onCancel }) {
           <option value="daily">每天这个时段</option>
           <option value="weekdays">每个工作日</option>
           <option value="holidays">每个节假日（初版按周末）</option>
+        </select>
+      </label>
+      <label className="wide">
+        提前提醒
+        <select value={form.reminder || "0"} onChange={(event) => update("reminder", event.target.value)}>
+          {REMINDER_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
         </select>
       </label>
       <label className="wide">
@@ -873,7 +1123,127 @@ function QuadrantPage({ now, selectedDate, setSelectedDate, grouped, draggedItem
   );
 }
 
-function AssistantPage({ messages, result, input, setInput, isLoading, onSend, onUpload }) {
+function CalendarPage({ cursor, days, entries, onPreviousMonth, onNextMonth, onToday, onSelectEntry }) {
+  const today = todayInputValue();
+  return (
+    <div className="page-stack">
+      <header className="page-top">
+        <div>
+          <span className="eyebrow">日历总览</span>
+          <h1>{cursor.year}年{cursor.month}月</h1>
+          <p>每一天只显示事件标题，点击事件查看详情。</p>
+        </div>
+        <div className="calendar-controls">
+          <button onClick={onPreviousMonth}>上个月</button>
+          <button onClick={onToday}>回到本月</button>
+          <button onClick={onNextMonth}>下个月</button>
+        </div>
+      </header>
+      <section className="calendar-board">
+        <div className="calendar-weekdays">
+          {["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map((day) => (
+            <span key={day}>{day}</span>
+          ))}
+        </div>
+        <div className="calendar-grid">
+          {days.map((day) => {
+            const dayEntries = getCalendarDayItems(day.iso, entries);
+            return (
+              <article
+                className={`calendar-day ${day.inCurrentMonth ? "" : "outside"} ${day.iso === today ? "today" : ""}`}
+                key={day.iso}
+              >
+                <header>
+                  <strong>{day.day}</strong>
+                  {day.iso === today && <span>今天</span>}
+                </header>
+                <div className="calendar-events">
+                  {dayEntries.slice(0, 4).map((entry) => (
+                    <button
+                      className={entry.item.status === "done" ? "done" : ""}
+                      key={entry.id}
+                      onClick={() => onSelectEntry(entry)}
+                      title={entry.item.title}
+                    >
+                      {entry.item.title}
+                    </button>
+                  ))}
+                  {dayEntries.length > 4 && <em>+{dayEntries.length - 4} 项</em>}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CalendarDetailModal({ entry, editMode, editForm, setEditForm, isLoading, onClose, onToggle, onEdit, onEditSubmit, onDelete }) {
+  const item = entry.item;
+  const note = item.notes || (item.materials?.length ? item.materials.join("、") : "无");
+  return (
+    <div
+      className="modal-backdrop"
+      role="button"
+      tabIndex={0}
+      aria-label="关闭日历详情"
+      onClick={(event) => event.target === event.currentTarget && onClose()}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" || event.key === "Enter") onClose();
+      }}
+    >
+      <section className="calendar-detail" role="dialog" aria-modal="true">
+        <header>
+          <div>
+            <span>{entry.date}</span>
+            <h2>{item.title}</h2>
+          </div>
+          <button onClick={onClose}>关闭</button>
+        </header>
+        {editMode ? (
+          <EditTodoForm form={editForm} setForm={setEditForm} isLoading={isLoading} onSubmit={onEditSubmit} onCancel={onClose} />
+        ) : (
+          <>
+            <dl>
+              <div>
+                <dt>时间</dt>
+                <dd>{formatDateTime(item.time?.start)}</dd>
+              </div>
+              <div>
+                <dt>地点</dt>
+                <dd>{item.location || "待确认"}</dd>
+              </div>
+              <div>
+                <dt>重复</dt>
+                <dd>{item.recurrence?.label || "不重复"}</dd>
+              </div>
+              <div>
+                <dt>提醒</dt>
+                <dd>{item.reminder?.label || "不提醒"}</dd>
+              </div>
+              <div>
+                <dt>四象限</dt>
+                <dd>{QUADRANTS[item.quadrant]?.title || "重要但不紧急"}</dd>
+              </div>
+              <div>
+                <dt>备注</dt>
+                <dd>{note}</dd>
+              </div>
+            </dl>
+            <div className="detail-actions">
+              <button onClick={onToggle}>{item.status === "done" ? "取消完成" : "标记完成"}</button>
+              <button onClick={onEdit}>修改</button>
+              <button onClick={onDelete}>删除</button>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function AssistantPage({ messages, result, input, setInput, isLoading, onSend, onUpload, onPaste, onSave }) {
   return (
     <div className="assistant-layout">
       <section className="chat-panel">
@@ -889,7 +1259,12 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
           ))}
         </div>
         <div className="assistant-input">
-          <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="输入通知、问题或需要确认的信息..." />
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onPaste={onPaste}
+            placeholder="输入通知、问题或需要确认的信息；也可以直接粘贴截图。"
+          />
           <div className="action-row">
             <label className="file-button">
               上传截图并提取
@@ -910,6 +1285,16 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
           <>
             {result.ocr && <OcrSummary ocr={result.ocr} />}
             <ValidationPanel result={result} />
+            <div className="assistant-result-actions">
+              {result.items?.length ? (
+                <button className="primary" onClick={onSave}>
+                  {isLoading ? "加入中..." : "加入待办清单"}
+                </button>
+              ) : (
+                <button disabled>没有可加入事项</button>
+              )}
+              <span>{result.items?.length || 0} 个事项待加入</span>
+            </div>
             <pre>{JSON.stringify(result.items[0] || {}, null, 2)}</pre>
           </>
         ) : (
@@ -925,6 +1310,7 @@ function TaskRow({ item, onToggle, onEdit, onDelete }) {
   const missing = [];
   if (!item.location) missing.push("缺地点");
   const note = item.notes || (item.materials?.length ? `材料：${item.materials.join("、")}` : "");
+  const evidenceText = item.kind === "schedule_course" ? "" : item.evidence;
 
   async function handleToggleClick() {
     const shouldReward = item.status !== "done";
@@ -944,7 +1330,7 @@ function TaskRow({ item, onToggle, onEdit, onDelete }) {
       </button>
       <div>
         <strong>{item.title}</strong>
-        <p>{item.evidence}</p>
+        {evidenceText && <p>{evidenceText}</p>}
       </div>
       <dl>
         <div>
@@ -960,10 +1346,11 @@ function TaskRow({ item, onToggle, onEdit, onDelete }) {
           <dd>{item.recurrence?.label || "不重复"}</dd>
         </div>
         <div>
-          <dt>备注</dt>
-          <dd>{note || "无"}</dd>
+          <dt>提醒</dt>
+          <dd>{item.reminder?.label || "不提醒"}</dd>
         </div>
       </dl>
+      {note && <p className="task-note">备注：{note}</p>}
       <div className="task-meta">
         <span className="confidence">可信度 {Math.round((item.confidence || 0) * 100)}%</span>
         <span>{item.source_type}</span>
@@ -1011,6 +1398,21 @@ function OcrSummary({ ocr }) {
 
 function EmptyState({ text = "还没有事项。先粘贴一条通知，或选择演示样例。" }) {
   return <div className="empty-state">{text}</div>;
+}
+
+function ReminderToast({ item, onClose }) {
+  return (
+    <section className="reminder-toast" role="status">
+      <div>
+        <strong>事项提醒</strong>
+        <span>{item.reminder?.label || "提醒"}</span>
+      </div>
+      <h3>{item.title}</h3>
+      <p>{formatDateTime(item.time?.start)} · {item.location || "地点待确认"}</p>
+      {item.notes && <p>{item.notes}</p>}
+      <button onClick={onClose}>知道了</button>
+    </section>
+  );
 }
 
 function fireLocalReward(target) {

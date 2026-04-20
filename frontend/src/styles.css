@@ -386,6 +386,53 @@ textarea {
   margin-bottom: 12px;
 }
 
+.todo-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.todo-overview button {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  background: #f7faf4;
+  border-color: #d7e3d5;
+}
+
+.todo-overview button.active {
+  background: #e8f2df;
+  border-color: #98c59b;
+}
+
+.todo-overview span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.todo-overview strong {
+  font-size: 24px;
+}
+
+.todo-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.4fr) repeat(3, minmax(105px, 1fr)) auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.todo-filter-bar input,
+.todo-filter-bar select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #fff;
+  color: var(--ink);
+  outline-color: var(--green);
+}
+
 .todo-list {
   display: grid;
   gap: 12px;
@@ -516,8 +563,14 @@ dd {
 }
 
 .task-row dl,
+.task-note,
 .task-actions {
   grid-column: 2;
+}
+
+.task-note {
+  margin: 0;
+  color: var(--muted);
 }
 
 .task-actions {
@@ -528,6 +581,42 @@ dd {
 
 .task-actions button {
   padding: 7px 10px;
+}
+
+.reminder-toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 30;
+  width: 320px;
+  background: #fff;
+  border: 1px solid #cfe0d2;
+  border-left: 5px solid var(--green);
+  border-radius: 8px;
+  box-shadow: 0 18px 45px rgba(32, 35, 30, 0.18);
+  padding: 16px;
+}
+
+.reminder-toast div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--green);
+}
+
+.reminder-toast h3 {
+  margin: 10px 0 8px;
+  font-size: 18px;
+}
+
+.reminder-toast p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin-top: 6px;
+}
+
+.reminder-toast button {
+  margin-top: 12px;
 }
 
 .validation-panel {
@@ -725,6 +814,135 @@ dd {
   white-space: nowrap;
 }
 
+.calendar-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.calendar-board {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 12px 28px rgba(32, 35, 30, 0.06);
+}
+
+.calendar-weekdays,
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.calendar-weekdays {
+  background: #f4f6ee;
+  border-bottom: 1px solid var(--line);
+}
+
+.calendar-weekdays span {
+  color: var(--muted);
+  font-weight: 700;
+  padding: 12px;
+  text-align: center;
+}
+
+.calendar-day {
+  min-height: 132px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  background: #fff;
+}
+
+.calendar-day:nth-child(7n) {
+  border-right: 0;
+}
+
+.calendar-day.outside {
+  background: #fafbf7;
+  color: #a1a69a;
+}
+
+.calendar-day.today {
+  background: #f4faf3;
+}
+
+.calendar-day header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.calendar-day header span {
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.calendar-events {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.calendar-events button {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 6px 8px;
+  text-align: left;
+  background: #eef6ef;
+  border-color: #cfe0d2;
+  color: #2f5d3c;
+}
+
+.calendar-events button.done {
+  background: #f5f6f2;
+  border-color: var(--line);
+  color: #8a8f84;
+  text-decoration: line-through;
+}
+
+.calendar-events em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.calendar-detail {
+  width: min(620px, 100%);
+  max-height: 86vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.calendar-detail > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.calendar-detail > header span {
+  color: var(--green);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.calendar-detail dl {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .drop-empty {
   border: 1px dashed #c9cbc4;
   border-radius: 8px;
@@ -773,6 +991,18 @@ dd {
 .assistant-input textarea {
   min-height: 96px;
   margin-top: 0;
+}
+
+.assistant-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.assistant-result-actions span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .structure-panel pre,

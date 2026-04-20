@@ -171,6 +171,8 @@ def build_ai_messages(context: dict) -> list[dict]:
                     "output_schema": _output_schema(),
                     "rules": [
                         "时间必须尽量解析为 ISO 8601，带时区。",
+                        "今天、明天、后天、本周、下周等相对日期，必须基于 context.current_date 和 context.timezone 解析，不能基于模型当前时间猜测。",
+                        "如果原文说“明天上午10点”，且 current_date 是 2026-04-20，则 start 必须是 2026-04-21T10:00:00+08:00。",
                         "不能确定的字段留空或空数组，并降低 confidence。",
                         "evidence 必须引用原文依据。",
                         "quadrant 只能是 important_urgent、important_not_urgent、not_important_urgent、not_important_not_urgent。",

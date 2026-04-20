@@ -104,6 +104,7 @@ def test_build_ics_exports_recurrence_and_notes():
             "time": {"start": "2026-04-21T09:00:00+08:00", "end": "2026-04-21T10:30:00+08:00"},
             "location": "博达校区1号教学楼",
             "notes": "带电脑",
+            "reminder": {"minutes_before": 30, "label": "提前30分钟"},
             "recurrence": {"type": "weekdays", "label": "每个工作日", "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"},
             "materials": [],
             "contacts": [],
@@ -118,6 +119,9 @@ def test_build_ics_exports_recurrence_and_notes():
 
     assert "SUMMARY:程序设计基础" in ics
     assert "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" in ics
+    assert "BEGIN:VALARM" in ics
+    assert "TRIGGER:-PT30M" in ics
+    assert "ACTION:DISPLAY" in ics
     assert "备注：带电脑" in ics
 
 
@@ -336,6 +340,6 @@ def test_ocr_extract_endpoint_turns_timetable_courses_into_events(tmp_path, monk
     assert "高等数学I" in titles
     assert program_item["time"]["start"] == "2025-11-26T09:00:00+08:00"
     assert program_item["location"] == "博达校区1号教学楼"
-    assert program_item["notes"] == "由课表截图 OCR 生成，具体节次请核对原图。"
+    assert program_item["notes"] == "具体节次请核对原图。"
     assert payload["json_debug"]["ocr_preprocess"]["detected_type"] == "timetable"
     assert len(payload["validation"]["issues"]) < 12

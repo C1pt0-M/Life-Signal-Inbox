@@ -27,6 +27,41 @@ export function calculateProgress(items) {
   };
 }
 
+export function calculateTodoOverview(items, now = new Date()) {
+  const pending = (items || []).filter((item) => item.status !== "done");
+  const today = todayInTimezone(now);
+  const { start, end } = weekRangeForDate(today);
+  return pending.reduce(
+    (summary, item) => {
+      const date = itemDateKey(item);
+      if (!date) {
+        summary.noTime += 1;
+        return summary;
+      }
+      if (date < today) summary.overdue += 1;
+      if (date === today) summary.today += 1;
+      if (date >= start && date <= end) summary.week += 1;
+      return summary;
+    },
+    { today: 0, overdue: 0, week: 0, noTime: 0 }
+  );
+}
+
+export function filterTodoItems(items, filters = {}, now = new Date()) {
+  const query = String(filters.query || "").trim().toLowerCase();
+  return (items || []).filter((item) => {
+    if (filters.status && filters.status !== "all") {
+      const status = item.status === "done" ? "done" : "todo";
+      if (status !== filters.status) return false;
+    }
+    if (filters.quadrant && filters.quadrant !== "all" && item.quadrant !== filters.quadrant) return false;
+    if (filters.timeScope && filters.timeScope !== "all" && itemTimeScope(item, now) !== filters.timeScope) return false;
+    if (!query) return true;
+    const haystack = [item.title, item.location, item.notes, item.evidence].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
 export function groupByQuadrant(items) {
   const grouped = Object.fromEntries(Object.keys(QUADRANTS).map((key) => [key, []]));
   for (const item of items) {
@@ -68,10 +103,34 @@ export function buildAiConfigPayload(form) {
   };
 }
 
+export function todayInTimezone(now = new Date(), timezone = "Asia/Shanghai") {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(now);
+}
+
+export function buildExtractionPayload(text, sourceType, now = new Date(), timezone = "Asia/Shanghai") {
+  return {
+    text,
+    source_type: sourceType,
+    current_date: todayInTimezone(now, timezone),
+    timezone,
+  };
+}
+
+export function getImageFileFromClipboardEvent(event) {
+  const files = Array.from(event?.clipboardData?.files || []);
+  const fileImage = files.find((file) => file.type?.startsWith("image/"));
+  if (fileImage) return fileImage;
+
+  const items = Array.from(event?.clipboardData?.items || []);
+  const imageItem = items.find((item) => item.type?.startsWith("image/"));
+  return imageItem?.getAsFile?.() || null;
+}
+
 export function buildManualTodoItem(form, options = {}) {
   const now = options.now ?? Date.now();
   const timezone = options.timezone || "Asia/Shanghai";
   const recurrence = buildRecurrence(form.recurrence);
+  const reminder = buildReminder(form.reminder);
   const start = buildIsoDateTime(form.date, form.startTime);
   const end = buildIsoDateTime(form.date, form.endTime || form.startTime);
   return {
@@ -87,6 +146,7 @@ export function buildManualTodoItem(form, options = {}) {
     contacts: [],
     notes: String(form.notes || "").trim(),
     recurrence,
+    reminder,
     evidence: "手动添加",
     source_type: "手动添加",
     confidence: 1,
@@ -96,8 +156,13 @@ export function buildManualTodoItem(form, options = {}) {
   };
 }
 
+export function buildSaveableAssistantItems(items) {
+  return (items || []).map((item) => ({ ...item, status: "todo" }));
+}
+
 export function buildTodoUpdate(item, form) {
   const recurrence = buildRecurrence(form.recurrence || item.recurrence?.type);
+  const reminder = buildReminder(form.reminder ?? item.reminder?.minutes_before);
   const start = buildIsoDateTime(form.date, form.startTime);
   const end = buildIsoDateTime(form.date, form.endTime || form.startTime);
   return {
@@ -112,15 +177,113 @@ export function buildTodoUpdate(item, form) {
     location: String(form.location ?? item.location ?? "").trim(),
     notes: String(form.notes ?? item.notes ?? "").trim(),
     recurrence,
+    reminder,
     quadrant: QUADRANTS[form.quadrant] ? form.quadrant : item.quadrant || "important_not_urgent",
     status: form.status || item.status || "todo",
   };
+}
+
+export function buildCalendarMonth(year, month) {
+  const firstDay = dateOnly(year, month, 1);
+  const mondayOffset = (firstDay.getUTCDay() + 6) % 7;
+  const gridStart = addDays(firstDay, -mondayOffset);
+  return Array.from({ length: 42 }, (_, index) => {
+    const current = addDays(gridStart, index);
+    return {
+      iso: formatDateOnly(current),
+      day: current.getUTCDate(),
+      month: current.getUTCMonth() + 1,
+      year: current.getUTCFullYear(),
+      inCurrentMonth: current.getUTCMonth() === month - 1,
+    };
+  });
+}
+
+export function expandCalendarItems(items, visibleStart, visibleEnd) {
+  const start = parseDateOnly(visibleStart);
+  const end = parseDateOnly(visibleEnd);
+  if (!start || !end) return [];
+
+  const occurrences = [];
+  for (const item of items) {
+    const itemDate = parseDateOnly(item.time?.start?.slice(0, 10));
+    if (!itemDate) continue;
+    const recurrenceType = item.recurrence?.type || "none";
+    if (recurrenceType === "none") {
+      if (isWithinDateRange(itemDate, start, end)) occurrences.push(buildOccurrence(item, itemDate));
+      continue;
+    }
+
+    let cursor = itemDate > start ? itemDate : start;
+    while (cursor <= end) {
+      if (cursor >= itemDate && matchesRecurrence(cursor, recurrenceType)) {
+        occurrences.push(buildOccurrence(item, cursor));
+      }
+      cursor = addDays(cursor, 1);
+    }
+  }
+
+  return occurrences.sort((first, second) => {
+    if (first.date !== second.date) return first.date.localeCompare(second.date);
+    const firstTime = timeOfDay(first.item.time?.start);
+    const secondTime = timeOfDay(second.item.time?.start);
+    return firstTime.localeCompare(secondTime);
+  });
+}
+
+export function getCalendarDayItems(date, expandedItems) {
+  return expandedItems.filter((entry) => entry.date === date);
 }
 
 export function splitTodoItems(items) {
   return {
     pending: items.filter((item) => item.status !== "done"),
     completed: items.filter((item) => item.status === "done"),
+  };
+}
+
+export function getDueReminders(items, now = new Date(), seenKeys = new Set()) {
+  const currentMinute = Math.floor(now.getTime() / 60_000);
+  return items
+    .filter((item) => item.status !== "done")
+    .map((item) => {
+      const minutes = Number(item.reminder?.minutes_before || 0);
+      const start = item.time?.start ? new Date(item.time.start) : null;
+      if (!minutes || !start || Number.isNaN(start.getTime())) return null;
+      const reminderMinute = Math.floor((start.getTime() - minutes * 60_000) / 60_000);
+      const key = `${item.id}:${item.time.start}:${minutes}`;
+      if (reminderMinute !== currentMinute || seenKeys.has(key)) return null;
+      return { ...item, reminder_key: key };
+    })
+    .filter(Boolean);
+}
+
+function itemTimeScope(item, now) {
+  const date = itemDateKey(item);
+  if (!date) return "no_time";
+  const today = todayInTimezone(now);
+  const { start, end } = weekRangeForDate(today);
+  if (date < today) return "overdue";
+  if (date === today) return "today";
+  if (date >= start && date <= end) return "week";
+  return "future";
+}
+
+function itemDateKey(item) {
+  const start = item?.time?.start;
+  if (!start) return "";
+  const parsed = new Date(start);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return todayInTimezone(parsed);
+}
+
+function weekRangeForDate(dateKey) {
+  const date = parseDateOnly(dateKey);
+  if (!date) return { start: dateKey, end: dateKey };
+  const mondayOffset = (date.getUTCDay() + 6) % 7;
+  return {
+    start: formatDateOnly(addDays(date, -mondayOffset)),
+    end: formatDateOnly(addDays(date, 6 - mondayOffset)),
   };
 }
 
@@ -132,6 +295,71 @@ function buildRecurrence(type = "none") {
     holidays: { type: "holidays", label: "每个节假日", rrule: "FREQ=WEEKLY;BYDAY=SA,SU" },
   };
   return rules[type] || rules.none;
+}
+
+function buildReminder(value = "0") {
+  const minutes = Number(value || 0);
+  const labels = {
+    0: "不提醒",
+    5: "提前5分钟",
+    15: "提前15分钟",
+    30: "提前30分钟",
+    60: "提前1小时",
+    1440: "提前1天",
+  };
+  return {
+    minutes_before: Number.isFinite(minutes) ? minutes : 0,
+    label: labels[minutes] || `提前${minutes}分钟`,
+  };
+}
+
+function dateOnly(year, month, day) {
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function parseDateOnly(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return dateOnly(Number(match[1]), Number(match[2]), Number(match[3]));
+}
+
+function addDays(date, days) {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function formatDateOnly(date) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isWithinDateRange(date, start, end) {
+  return date >= start && date <= end;
+}
+
+function matchesRecurrence(date, type) {
+  const day = date.getUTCDay();
+  if (type === "daily") return true;
+  if (type === "weekdays") return day >= 1 && day <= 5;
+  if (type === "holidays") return day === 0 || day === 6;
+  return false;
+}
+
+function buildOccurrence(item, date) {
+  const iso = formatDateOnly(date);
+  return {
+    id: `${item.id}:${iso}`,
+    date: iso,
+    item,
+    isRecurring: (item.recurrence?.type || "none") !== "none",
+  };
+}
+
+function timeOfDay(value) {
+  return String(value || "").slice(11, 19);
 }
 
 function buildIsoDateTime(date, time) {
@@ -176,6 +404,7 @@ export function updateEditableItem(items, itemId, patch) {
 }
 
 function buildAssistantNote(item) {
+  if (item.kind === "schedule_course") return item.notes || "具体节次请核对原图。";
   const parts = [];
   if (item.notes) parts.push(item.notes);
   else if (item.materials?.length) parts.push(`课程/材料：${item.materials.join("、")}`);
