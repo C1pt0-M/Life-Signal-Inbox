@@ -485,15 +485,12 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <aside className="rail">
-        <div className="brand">
-          <span className="brand-mark">LS</span>
-          <div>
-            <strong>Life Signal Inbox</strong>
-            <small>生活信号收件箱</small>
-          </div>
+      <header className="fabric-header">
+        <div className="fabric-brand">
+          Woven & Weft
+          <small>Life Signal Inbox</small>
         </div>
-        <nav>
+        <nav className="fabric-nav">
           <button className={activePage === "todos" ? "active" : ""} onClick={() => setActivePage("todos")}>
             待办清单
           </button>
@@ -507,53 +504,7 @@ export default function App() {
             AI 助手
           </button>
         </nav>
-        <div className="rail-note">
-          <span>AI 模型设置</span>
-          <p>可在前端临时配置，也可读取 backend/.env。</p>
-          <strong>{describeAiExtractor(appConfig)}</strong>
-          <button className="rail-config-button" onClick={() => setAiConfigOpen((current) => !current)}>
-            {aiConfigOpen ? "收起配置" : "前端配置模型"}
-          </button>
-          {aiConfigOpen && (
-            <form className="ai-config-form" onSubmit={handleAiConfigSubmit}>
-              <label>
-                服务类型
-                <input
-                  value={aiConfigForm.provider}
-                  onChange={(event) => setAiConfigForm((current) => ({ ...current, provider: event.target.value }))}
-                />
-              </label>
-              <label>
-                模型名称
-                <input
-                  value={aiConfigForm.model}
-                  onChange={(event) => setAiConfigForm((current) => ({ ...current, model: event.target.value }))}
-                />
-              </label>
-              <label>
-                接口地址
-                <input
-                  value={aiConfigForm.base_url}
-                  onChange={(event) => setAiConfigForm((current) => ({ ...current, base_url: event.target.value }))}
-                />
-              </label>
-              <label>
-                模型密钥
-                <input
-                  type="password"
-                  value={aiConfigForm.api_key}
-                  placeholder="只在本次后端运行期间生效"
-                  onChange={(event) => setAiConfigForm((current) => ({ ...current, api_key: event.target.value }))}
-                />
-              </label>
-              <button type="submit" disabled={isLoading}>
-                {isLoading ? "保存中..." : "保存配置"}
-              </button>
-              {aiConfigMessage && <p>{aiConfigMessage}</p>}
-            </form>
-          )}
-        </div>
-      </aside>
+      </header>
 
       <section className="workspace">
         {error && <div className="error-banner">{error}</div>}
@@ -657,7 +608,9 @@ export default function App() {
           <section className="json-modal" role="dialog" aria-modal="true">
             <header>
               <h2>结构化 JSON</h2>
-              <button onClick={() => setJsonOpen(false)}>关闭</button>
+              <button className="btn-fabric btn-fabric-secondary" onClick={() => setJsonOpen(false)}>
+                <span className="btn-bg"></span>关闭
+              </button>
             </header>
             <pre>{JSON.stringify(result || { history }, null, 2)}</pre>
           </section>
@@ -744,11 +697,18 @@ function TodoPage(props) {
           </div>
           <TodoFilterBar filters={props.filters} setFilters={props.setFilters} />
           <div className="toolbar">
-            <button onClick={props.onSave} disabled={!props.result?.items?.length}>
+            <button className="btn-fabric" onClick={props.onSave} disabled={!props.result?.items?.length}>
+              <span className="btn-bg"></span>
               加入待办清单
             </button>
-            <button onClick={props.onExport}>导出 ICS</button>
-            <button onClick={props.onJson}>查看 JSON</button>
+            <button className="btn-fabric btn-fabric-secondary" onClick={props.onExport}>
+              <span className="btn-bg"></span>
+              导出 ICS
+            </button>
+            <button className="btn-fabric btn-fabric-secondary" onClick={props.onJson}>
+              <span className="btn-bg"></span>
+              查看 JSON
+            </button>
           </div>
           <div className="todo-list">
             {allItems.length ? (
@@ -791,12 +751,15 @@ function TodoOverview({ overview, activeScope, setFilters }) {
     <section className="todo-overview">
       {cards.map((card) => (
         <button
-          className={activeScope === card.key ? "active" : ""}
+          className={`btn-fabric btn-fabric-secondary ${activeScope === card.key ? "active" : ""}`}
           key={card.key}
           onClick={() => setFilters((current) => ({ ...current, timeScope: current.timeScope === card.key ? "all" : card.key }))}
         >
-          <span>{card.label}</span>
-          <strong>{card.value}</strong>
+          <span className="btn-bg"></span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', zIndex: 1, position: 'relative' }}>
+            <span>{card.label}</span>
+            <strong>{card.value}</strong>
+          </div>
         </button>
       ))}
     </section>
@@ -831,7 +794,9 @@ function TodoFilterBar({ filters, setFilters }) {
         <option value="week">本周</option>
         <option value="no_time">无时间</option>
       </select>
-      <button onClick={() => setFilters(DEFAULT_TODO_FILTERS)}>重置</button>
+      <button className="btn-fabric btn-fabric-secondary" onClick={() => setFilters(DEFAULT_TODO_FILTERS)}>
+        <span className="btn-bg"></span>重置
+      </button>
     </section>
   );
 }
@@ -918,7 +883,8 @@ function ManualTodoForm({ form, setForm, isLoading, onSubmit }) {
           ))}
         </select>
       </label>
-      <button className="primary" type="submit" disabled={isLoading}>
+      <button className="btn-fabric" type="submit" disabled={isLoading}>
+        <span className="btn-bg"></span>
         {isLoading ? "保存中..." : "加入待办清单"}
       </button>
     </form>
@@ -992,10 +958,12 @@ function EditTodoForm({ form, setForm, isLoading, onSubmit, onCancel }) {
         </select>
       </label>
       <div className="form-actions">
-        <button className="primary" type="submit" disabled={isLoading}>
+        <button className="btn-fabric" type="submit" disabled={isLoading}>
+          <span className="btn-bg"></span>
           {isLoading ? "保存中..." : "保存修改"}
         </button>
-        <button type="button" onClick={onCancel}>
+        <button className="btn-fabric btn-fabric-secondary" type="button" onClick={onCancel}>
+          <span className="btn-bg"></span>
           取消
         </button>
       </div>
@@ -1022,7 +990,8 @@ function ConfirmationEditor({ items, pendingConfirmations, isLoading, onEditItem
           <strong>待确认项编辑</strong>
           <p>补齐字段后重新验证，再加入待办清单。</p>
         </div>
-        <button onClick={onRevalidate} disabled={isLoading}>
+        <button className="btn-fabric" onClick={onRevalidate} disabled={isLoading}>
+          <span className="btn-bg"></span>
           {isLoading ? "验证中..." : "重新验证"}
         </button>
       </div>
@@ -1134,9 +1103,15 @@ function CalendarPage({ cursor, days, entries, onPreviousMonth, onNextMonth, onT
           <p>每一天只显示事件标题，点击事件查看详情。</p>
         </div>
         <div className="calendar-controls">
-          <button onClick={onPreviousMonth}>上个月</button>
-          <button onClick={onToday}>回到本月</button>
-          <button onClick={onNextMonth}>下个月</button>
+          <button className="btn-fabric btn-fabric-secondary" onClick={onPreviousMonth}>
+            <span className="btn-bg"></span>上个月
+          </button>
+          <button className="btn-fabric btn-fabric-secondary" onClick={onToday}>
+            <span className="btn-bg"></span>回到本月
+          </button>
+          <button className="btn-fabric btn-fabric-secondary" onClick={onNextMonth}>
+            <span className="btn-bg"></span>下个月
+          </button>
         </div>
       </header>
       <section className="calendar-board">
@@ -1199,7 +1174,10 @@ function CalendarDetailModal({ entry, editMode, editForm, setEditForm, isLoading
             <span>{entry.date}</span>
             <h2>{item.title}</h2>
           </div>
-          <button onClick={onClose}>关闭</button>
+          <button className="btn-fabric btn-fabric-secondary" onClick={onClose}>
+            <span className="btn-bg"></span>
+            关闭
+          </button>
         </header>
         {editMode ? (
           <EditTodoForm form={editForm} setForm={setEditForm} isLoading={isLoading} onSubmit={onEditSubmit} onCancel={onClose} />
@@ -1232,9 +1210,18 @@ function CalendarDetailModal({ entry, editMode, editForm, setEditForm, isLoading
               </div>
             </dl>
             <div className="detail-actions">
-              <button onClick={onToggle}>{item.status === "done" ? "取消完成" : "标记完成"}</button>
-              <button onClick={onEdit}>修改</button>
-              <button onClick={onDelete}>删除</button>
+              <button className="btn-fabric" onClick={onToggle}>
+                <span className="btn-bg"></span>
+                {item.status === "done" ? "取消完成" : "标记完成"}
+              </button>
+              <button className="btn-fabric btn-fabric-secondary" onClick={onEdit}>
+                <span className="btn-bg"></span>
+                修改
+              </button>
+              <button className="btn-fabric btn-fabric-secondary" onClick={onDelete}>
+                <span className="btn-bg"></span>
+                删除
+              </button>
             </div>
           </>
         )}
@@ -1270,7 +1257,8 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
               上传截图并提取
               <input type="file" accept="image/*" onChange={onUpload} />
             </label>
-            <button className="primary" onClick={onSend} disabled={isLoading}>
+            <button className="btn-fabric" onClick={onSend} disabled={isLoading}>
+              <span className="btn-bg"></span>
               {isLoading ? "整理中..." : "发送并提取"}
             </button>
           </div>
@@ -1287,11 +1275,15 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
             <ValidationPanel result={result} />
             <div className="assistant-result-actions">
               {result.items?.length ? (
-                <button className="primary" onClick={onSave}>
+                <button className="btn-fabric" onClick={onSave}>
+                  <span className="btn-bg"></span>
                   {isLoading ? "加入中..." : "加入待办清单"}
                 </button>
               ) : (
-                <button disabled>没有可加入事项</button>
+                <button className="btn-fabric btn-fabric-secondary" disabled>
+                  <span className="btn-bg"></span>
+                  没有可加入事项
+                </button>
               )}
               <span>{result.items?.length || 0} 个事项待加入</span>
             </div>
@@ -1325,9 +1317,7 @@ function TaskRow({ item, onToggle, onEdit, onDelete }) {
         className="complete-toggle"
         aria-label={item.status === "done" ? "取消完成" : "标记完成"}
         onClick={handleToggleClick}
-      >
-        {item.status === "done" ? "✓" : ""}
-      </button>
+      />
       <div>
         <strong>{item.title}</strong>
         {evidenceText && <p>{evidenceText}</p>}
@@ -1359,8 +1349,14 @@ function TaskRow({ item, onToggle, onEdit, onDelete }) {
         ))}
       </div>
       <div className="task-actions">
-        <button onClick={() => onEdit(item)}>修改</button>
-        <button onClick={() => onDelete(item)}>删除</button>
+        <button className="btn-fabric btn-fabric-secondary" onClick={() => onEdit(item)}>
+          <span className="btn-bg"></span>
+          修改
+        </button>
+        <button className="btn-fabric btn-fabric-secondary" onClick={() => onDelete(item)}>
+          <span className="btn-bg"></span>
+          删除
+        </button>
       </div>
     </article>
   );
@@ -1410,7 +1406,10 @@ function ReminderToast({ item, onClose }) {
       <h3>{item.title}</h3>
       <p>{formatDateTime(item.time?.start)} · {item.location || "地点待确认"}</p>
       {item.notes && <p>{item.notes}</p>}
-      <button onClick={onClose}>知道了</button>
+      <button className="btn-fabric btn-fabric-secondary" onClick={onClose} style={{ marginTop: '12px' }}>
+        <span className="btn-bg"></span>
+        知道了
+      </button>
     </section>
   );
 }

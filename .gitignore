@@ -9,3 +9,4 @@ logs/
 .env
 .venv/
 /AGENTS.md
+/visual-fabric-preview.html
