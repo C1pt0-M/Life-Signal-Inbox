@@ -3,15 +3,16 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .ai_extractor import get_ai_config_status
+from .ai_extractor import get_ai_config_status, set_runtime_ai_config
 from .extractor import build_context, extract_life_items
 from .ics import build_ics
 from .ocr import extract_text_from_image
+from .ocr_postprocess import build_ocr_structured_result
 from .storage import SQLiteHistoryStore
 from .validator import validate_items
 
@@ -43,6 +44,13 @@ class SaveRequest(BaseModel):
 class ValidateRequest(BaseModel):
     items: list[dict]
     historical_items: list[dict] | None = None
+
+
+class AIConfigRequest(BaseModel):
+    provider: str = "openai-compatible"
+    api_key: str
+    model: str = "gpt-4o-mini"
+    base_url: str = "https://api.openai.com/v1"
 
 
 SAMPLES = [
@@ -79,6 +87,18 @@ def config() -> dict:
     return {"ai_extractor": get_ai_config_status()}
 
 
+@app.post("/api/config")
+def update_config(request: AIConfigRequest) -> dict:
+    return {
+        "ai_extractor": set_runtime_ai_config(
+            provider=request.provider,
+            api_key=request.api_key,
+            model=request.model,
+            base_url=request.base_url,
+        )
+    }
+
+
 @app.get("/api/history")
 def history() -> list[dict]:
     return store.list_items()
@@ -87,16 +107,13 @@ def history() -> list[dict]:
 @app.post("/api/extract")
 def extract(request: ExtractRequest) -> dict:
     history_items = store.list_items()
-    context = build_context(
-        raw_text=request.text,
+    return _extract_text_payload(
+        text=request.text,
         source_type=request.source_type,
         current_date=request.current_date or date.today().isoformat(),
         timezone=request.timezone,
-        historical_items=history_items,
+        history_items=history_items,
     )
-    result = extract_life_items(context)
-    validation = validate_items(result["items"], history_items)
-    return {**result, "validation": validation}
 
 
 @app.post("/api/todos")
@@ -126,3 +143,85 @@ def export_ics() -> Response:
 async def ocr(file: UploadFile = File(...)) -> dict:
     content = await file.read()
     return extract_text_from_image(file.filename or "upload.png", content)
+
+
+@app.post("/api/ocr-extract")
+async def ocr_extract(
+    file: UploadFile = File(...),
+    source_type: str = Form("截图文字"),
+    current_date: str | None = Form(None),
+    timezone: str = Form("Asia/Shanghai"),
+) -> dict:
+    content = await file.read()
+    ocr_result = extract_text_from_image(file.filename or "upload.png", content)
+    text = ocr_result.get("text", "")
+    if not text.strip():
+        return {
+            "ocr": ocr_result,
+            "context": build_context(
+                raw_text="",
+                source_type=source_type,
+                current_date=current_date or date.today().isoformat(),
+                timezone=timezone,
+                historical_items=store.list_items(),
+            ),
+            "items": [],
+            "json_debug": {
+                "extractor": "ocr_to_ai_skipped",
+                "reason": ocr_result.get("error") or "empty_ocr_text",
+            },
+            "validation": {
+                "score": 0,
+                "issues": [
+                    {
+                        "type": "empty_ocr_text",
+                        "severity": "high",
+                        "item_id": "",
+                        "message": "截图没有识别出可用于提取的文字",
+                    }
+                ],
+                "pending_confirmations": [],
+                "has_blockers": True,
+            },
+        }
+
+    history_items = store.list_items()
+    context = build_context(
+        raw_text=text,
+        source_type=source_type,
+        current_date=current_date or date.today().isoformat(),
+        timezone=timezone,
+        historical_items=history_items,
+    )
+    structured_ocr_result = build_ocr_structured_result(ocr_result, context)
+    if structured_ocr_result:
+        validation = validate_items(structured_ocr_result["items"], history_items)
+        return {"ocr": ocr_result, **structured_ocr_result, "validation": validation}
+
+    result = _extract_text_payload(
+        text=text,
+        source_type=source_type,
+        current_date=current_date or date.today().isoformat(),
+        timezone=timezone,
+        history_items=history_items,
+    )
+    return {"ocr": ocr_result, **result}
+
+
+def _extract_text_payload(
+    text: str,
+    source_type: str,
+    current_date: str,
+    timezone: str,
+    history_items: list[dict],
+) -> dict:
+    context = build_context(
+        raw_text=text,
+        source_type=source_type,
+        current_date=current_date,
+        timezone=timezone,
+        historical_items=history_items,
+    )
+    result = extract_life_items(context)
+    validation = validate_items(result["items"], history_items)
+    return {**result, "validation": validation}

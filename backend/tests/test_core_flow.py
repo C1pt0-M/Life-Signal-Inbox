@@ -96,6 +96,31 @@ def test_build_ics_exports_calendar_event():
     assert "LOCATION:学习平台" in ics
 
 
+def test_build_ics_exports_recurrence_and_notes():
+    items = [
+        {
+            "id": "manual-1",
+            "title": "程序设计基础",
+            "time": {"start": "2026-04-21T09:00:00+08:00", "end": "2026-04-21T10:30:00+08:00"},
+            "location": "博达校区1号教学楼",
+            "notes": "带电脑",
+            "recurrence": {"type": "weekdays", "label": "每个工作日", "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"},
+            "materials": [],
+            "contacts": [],
+            "confidence": 1,
+            "evidence": "手动添加",
+            "source_type": "手动添加",
+            "quadrant": "important_urgent",
+        }
+    ]
+
+    ics = build_ics(items, generated_at=datetime(2026, 4, 19, 12, 0, 0))
+
+    assert "SUMMARY:程序设计基础" in ics
+    assert "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" in ics
+    assert "备注：带电脑" in ics
+
+
 def test_history_store_roundtrip(tmp_path):
     store = SQLiteHistoryStore(tmp_path / "history.db")
     saved = store.save_items(
@@ -202,3 +227,78 @@ def test_todo_api_persists_items_in_sqlite_store(tmp_path, monkeypatch):
     assert save_response.status_code == 200
     assert history_response.json()[0]["id"] == "api-item-1"
     assert "SUMMARY:课程作业提交" in ics_response.text
+
+
+def test_ocr_extract_endpoint_runs_ocr_then_structured_extraction(tmp_path, monkeypatch):
+    from app import main as main_module
+
+    monkeypatch.setattr(main_module, "store", SQLiteHistoryStore(tmp_path / "ocr-history.db"))
+    monkeypatch.setattr(
+        main_module,
+        "extract_text_from_image",
+        lambda filename, content: {
+            "filename": filename,
+            "text": "截图通知：4月21日17:30前在学习平台提交论文PDF，如有问题联系助教。",
+            "confidence": 0.91,
+            "provider": "paddleocr",
+            "blocks": [{"text": "截图通知：4月21日17:30前在学习平台提交论文PDF，如有问题联系助教。", "confidence": 0.91}],
+        },
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ocr-extract",
+        files={"file": ("notice.png", b"image-bytes", "image/png")},
+        data={"current_date": "2026-04-19", "timezone": "Asia/Shanghai"},
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["ocr"]["provider"] == "paddleocr"
+    assert payload["context"]["source_type"] == "截图文字"
+    assert payload["items"][0]["title"] == "课程作业提交"
+    assert payload["items"][0]["time"]["start"] == "2026-04-21T17:30:00+08:00"
+    assert payload["validation"]["score"] > 0
+
+
+def test_ocr_extract_endpoint_turns_timetable_courses_into_events(tmp_path, monkeypatch):
+    from app import main as main_module
+
+    noisy_timetable = (
+        "我的课表 2025-2026学年第一学期 第11周 长按格子添加备注 "
+        "11 24日 25日 26日 27日 28日 29日 30日 月 周一 周二 周三 周四 周五 周六 周日 "
+        "大学英 高等数 程序设 语（@ 学I@博 计基础 @博达校区1号教学楼 "
+        "高等数学I@博达校区1号教学楼 烹饪营养与@博达校区1号教学楼 "
+        "体育(A) 形势与政策 思想道德与法治 奇石妙赏 备注：[100580]程序设计基础(004)第1-16周"
+    )
+    monkeypatch.setattr(main_module, "store", SQLiteHistoryStore(tmp_path / "ocr-timetable.db"))
+    monkeypatch.setattr(
+        main_module,
+        "extract_text_from_image",
+        lambda filename, content: {
+            "filename": filename,
+            "text": noisy_timetable,
+            "confidence": 0.63,
+            "provider": "paddleocr",
+            "blocks": [{"text": noisy_timetable, "confidence": 0.63}],
+        },
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ocr-extract",
+        files={"file": ("timetable.jpg", b"image-bytes", "image/jpeg")},
+        data={"current_date": "2026-04-20", "timezone": "Asia/Shanghai"},
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    titles = [item["title"] for item in payload["items"]]
+    program_item = next(item for item in payload["items"] if item["title"] == "程序设计基础")
+    assert "程序设计基础" in titles
+    assert "高等数学I" in titles
+    assert program_item["time"]["start"] == "2025-11-26T09:00:00+08:00"
+    assert program_item["location"] == "博达校区1号教学楼"
+    assert program_item["notes"] == "由课表截图 OCR 生成，具体节次请核对原图。"
+    assert payload["json_debug"]["ocr_preprocess"]["detected_type"] == "timetable"
+    assert len(payload["validation"]["issues"]) < 12

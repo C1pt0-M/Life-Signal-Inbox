@@ -1,5 +1,15 @@
-from app.ai_extractor import extract_with_ai, parse_model_json
+from app.ai_extractor import (
+    build_ai_messages,
+    clear_runtime_ai_config,
+    extract_with_ai,
+    get_ai_config_status,
+    get_configured_ai_client,
+    parse_model_json,
+)
 from app.extractor import build_context, extract_life_items
+from app.main import app
+from app.settings import load_env_file
+from fastapi.testclient import TestClient
 
 
 class FakeAIClient:
@@ -61,6 +71,21 @@ def test_ai_extraction_uses_structured_context_and_output():
     assert "raw_text" in client.messages[0][1]["content"]
 
 
+def test_ai_prompt_warns_against_over_extracting_noisy_ocr():
+    context = build_context(
+        raw_text="我的课表 第8周 周一 周二 软件工 程 概率论 @ 博达校 区1号 教学楼",
+        source_type="截图文字",
+        current_date="2026-04-20",
+        timezone="Asia/Shanghai",
+        historical_items=[],
+    )
+
+    messages = build_ai_messages(context)
+
+    assert "低质量 OCR" in messages[1]["content"]
+    assert "不要强行拆成多个事项" in messages[1]["content"]
+
+
 def test_ai_extraction_repairs_invalid_result_after_validation():
     context = build_context(
         raw_text="明天上午9点社区中心登记，请带身份证。",
@@ -115,3 +140,62 @@ def test_extract_life_items_falls_back_to_rules_when_ai_fails():
     assert result["items"][0]["title"] == "家长会确认参会"
     assert result["json_debug"]["extractor"] == "mock_ai_rules_v1"
     assert result["json_debug"]["ai_fallback"]["reason"] == "model_output_not_json"
+
+
+def test_load_env_file_configures_openai_compatible_client(tmp_path, monkeypatch):
+    clear_runtime_ai_config()
+    monkeypatch.delenv("LIFE_SIGNAL_AI_PROVIDER", raising=False)
+    monkeypatch.delenv("LIFE_SIGNAL_AI_API_KEY", raising=False)
+    monkeypatch.delenv("LIFE_SIGNAL_AI_MODEL", raising=False)
+    monkeypatch.delenv("LIFE_SIGNAL_AI_BASE_URL", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "LIFE_SIGNAL_AI_PROVIDER=openai-compatible",
+                "LIFE_SIGNAL_AI_API_KEY=test-secret-key",
+                "LIFE_SIGNAL_AI_MODEL=demo-model",
+                "LIFE_SIGNAL_AI_BASE_URL=https://example.test/v1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    load_env_file(env_file)
+    status = get_ai_config_status()
+    client = get_configured_ai_client()
+
+    assert status["enabled"] is True
+    assert status["provider"] == "openai-compatible"
+    assert status["model"] == "demo-model"
+    assert status["base_url"] == "https://example.test/v1"
+    assert "secret" not in str(status).lower()
+    assert client is not None
+    clear_runtime_ai_config()
+
+
+def test_config_endpoint_accepts_runtime_ai_config_without_exposing_secret(monkeypatch):
+    clear_runtime_ai_config()
+    monkeypatch.delenv("LIFE_SIGNAL_AI_PROVIDER", raising=False)
+    monkeypatch.delenv("LIFE_SIGNAL_AI_API_KEY", raising=False)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/config",
+        json={
+            "provider": "openai-compatible",
+            "api_key": "dummy-runtime-key",
+            "model": "demo-runtime-model",
+            "base_url": "https://runtime.example/v1",
+        },
+    )
+    payload = response.json()["ai_extractor"]
+
+    assert response.status_code == 200
+    assert payload["enabled"] is True
+    assert payload["source"] == "runtime"
+    assert payload["model"] == "demo-runtime-model"
+    assert payload["base_url"] == "https://runtime.example/v1"
+    assert "dummy-runtime-key" not in str(response.json())
+    assert get_configured_ai_client() is not None
+    clear_runtime_ai_config()

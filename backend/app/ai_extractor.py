@@ -8,7 +8,13 @@ from datetime import date, datetime, timedelta
 from typing import Protocol
 from urllib import request
 
+from .settings import load_default_env_files
 from .validator import validate_items
+
+
+load_default_env_files()
+
+_RUNTIME_AI_CONFIG: dict[str, str] = {}
 
 
 class AIClient(Protocol):
@@ -52,28 +58,62 @@ class OpenAICompatibleClient:
 
 
 def get_configured_ai_client() -> AIClient | None:
-    provider = os.getenv("LIFE_SIGNAL_AI_PROVIDER", "").strip().lower()
+    config = _effective_ai_config()
+    provider = config["provider"]
     if provider not in {"openai", "openai-compatible", "openai_compatible"}:
         return None
 
-    api_key = os.getenv("LIFE_SIGNAL_AI_API_KEY") or os.getenv("OPENAI_API_KEY")
-    model = os.getenv("LIFE_SIGNAL_AI_MODEL", "gpt-4o-mini")
-    base_url = os.getenv("LIFE_SIGNAL_AI_BASE_URL", "https://api.openai.com/v1")
+    api_key = config["api_key"]
+    model = config["model"]
+    base_url = config["base_url"]
     if not api_key:
         return None
     return OpenAICompatibleClient(api_key=api_key, model=model, base_url=base_url)
 
 
 def get_ai_config_status() -> dict:
-    provider = os.getenv("LIFE_SIGNAL_AI_PROVIDER", "").strip().lower()
-    api_key_present = bool(os.getenv("LIFE_SIGNAL_AI_API_KEY") or os.getenv("OPENAI_API_KEY"))
+    config = _effective_ai_config()
+    provider = config["provider"]
+    api_key_present = bool(config["api_key"])
     enabled = provider in {"openai", "openai-compatible", "openai_compatible"} and api_key_present
     return {
         "enabled": enabled,
         "provider": provider or "rules_fallback",
-        "model": os.getenv("LIFE_SIGNAL_AI_MODEL", "gpt-4o-mini") if enabled else "",
+        "model": config["model"] if enabled else "",
+        "base_url": config["base_url"] if enabled else "",
         "mode": "ai_harness_v1" if enabled else "mock_ai_rules_v1",
         "fallback": "mock_ai_rules_v1",
+        "source": config["source"] if enabled else "rules_fallback",
+        "api_key_present": api_key_present,
+    }
+
+
+def set_runtime_ai_config(provider: str, api_key: str, model: str, base_url: str) -> dict:
+    _RUNTIME_AI_CONFIG.clear()
+    _RUNTIME_AI_CONFIG.update(
+        {
+            "provider": provider.strip().lower(),
+            "api_key": api_key.strip(),
+            "model": model.strip() or "gpt-4o-mini",
+            "base_url": (base_url.strip() or "https://api.openai.com/v1").rstrip("/"),
+        }
+    )
+    return get_ai_config_status()
+
+
+def clear_runtime_ai_config() -> None:
+    _RUNTIME_AI_CONFIG.clear()
+
+
+def _effective_ai_config() -> dict:
+    if _RUNTIME_AI_CONFIG:
+        return {**_RUNTIME_AI_CONFIG, "source": "runtime"}
+    return {
+        "provider": os.getenv("LIFE_SIGNAL_AI_PROVIDER", "").strip().lower(),
+        "api_key": os.getenv("LIFE_SIGNAL_AI_API_KEY") or os.getenv("OPENAI_API_KEY") or "",
+        "model": os.getenv("LIFE_SIGNAL_AI_MODEL", "gpt-4o-mini"),
+        "base_url": os.getenv("LIFE_SIGNAL_AI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+        "source": "env",
     }
 
 
@@ -134,6 +174,8 @@ def build_ai_messages(context: dict) -> list[dict]:
                         "不能确定的字段留空或空数组，并降低 confidence。",
                         "evidence 必须引用原文依据。",
                         "quadrant 只能是 important_urgent、important_not_urgent、not_important_urgent、not_important_not_urgent。",
+                        "如果输入来自截图文字，并且像低质量 OCR 或课表/表格网格文本，不要强行拆成多个事项。",
+                        "对低质量 OCR，可生成一个待确认聚合事项，标题如“课表截图待确认”，把可识别课程或材料放入 materials。",
                     ],
                 },
                 ensure_ascii=False,

@@ -1,10 +1,23 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-import { exportIcs, extractNotice, getConfig, getHistory, getSamples, saveTodos, uploadImage, validateTodos } from "./api.js";
+import {
+  configureAi,
+  exportIcs,
+  extractNotice,
+  getConfig,
+  getHistory,
+  getSamples,
+  saveTodos,
+  uploadImageAndExtract,
+  validateTodos,
+} from "./api.js";
 import {
   applyQuadrantOverrides,
+  buildAiConfigPayload,
+  buildManualTodoItem,
   calculateProgress,
   describeAiExtractor,
+  formatAssistantExtraction,
   formatDateTime,
   formatFullNow,
   groupByQuadrant,
@@ -17,6 +30,20 @@ import {
 
 const SOURCE_TYPES = ["微信群", "短信", "课程通知", "社区公告", "报名信息", "截图文字"];
 const QUADRANT_STORAGE_KEY = "life-signal-inbox-quadrants";
+const DEFAULT_MANUAL_FORM = {
+  title: "",
+  date: todayInputValue(),
+  startTime: "09:00",
+  endTime: "10:00",
+  recurrence: "none",
+  location: "",
+  notes: "",
+  quadrant: "important_not_urgent",
+};
+
+function todayInputValue() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+}
 
 export default function App() {
   const [activePage, setActivePage] = useState("todos");
@@ -32,14 +59,28 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState("2026-04-20");
   const [draggedItemId, setDraggedItemId] = useState("");
   const [quadrantOverrides, setQuadrantOverrides] = useState(loadQuadrantOverrides);
+  const [manualForm, setManualForm] = useState(DEFAULT_MANUAL_FORM);
   const [appConfig, setAppConfig] = useState(null);
+  const [aiConfigOpen, setAiConfigOpen] = useState(false);
+  const [aiConfigMessage, setAiConfigMessage] = useState("");
+  const [aiConfigForm, setAiConfigForm] = useState({
+    provider: "openai-compatible",
+    api_key: "",
+    model: "gpt-4o-mini",
+    base_url: "https://api.openai.com/v1",
+  });
   const [messages, setMessages] = useState([
     { id: "intro", role: "assistant", text: "把通知、截图文字或需要确认的信息发给我，我会整理成待办和待确认项。" },
   ]);
 
   useEffect(() => {
     getSamples().then(setSamples).catch(() => setSamples([]));
-    getConfig().then(setAppConfig).catch(() => setAppConfig(null));
+    getConfig()
+      .then((config) => {
+        setAppConfig(config);
+        syncAiConfigForm(config);
+      })
+      .catch(() => setAppConfig(null));
     refreshHistory();
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
@@ -64,6 +105,40 @@ export default function App() {
     }
   }
 
+  function syncAiConfigForm(config) {
+    const extractor = config?.ai_extractor;
+    if (!extractor?.enabled) return;
+    setAiConfigForm((current) => ({
+      ...current,
+      provider: extractor.provider || current.provider,
+      model: extractor.model || current.model,
+      base_url: extractor.base_url || current.base_url,
+      api_key: "",
+    }));
+  }
+
+  async function handleAiConfigSubmit(event) {
+    event.preventDefault();
+    const payload = buildAiConfigPayload(aiConfigForm);
+    if (!payload.api_key) {
+      setAiConfigMessage("请填写模型密钥，提交后只保存在后端运行内存中。");
+      return;
+    }
+    setIsLoading(true);
+    setError("");
+    setAiConfigMessage("");
+    try {
+      const data = await configureAi(payload);
+      setAppConfig(data);
+      setAiConfigForm((current) => ({ ...current, api_key: "" }));
+      setAiConfigMessage("模型配置已启用，本次后端运行期间生效。");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   async function handleExtract(text = input, fromAssistant = false) {
     if (!text.trim()) return;
     setIsLoading(true);
@@ -84,7 +159,7 @@ export default function App() {
           {
             id: `assistant-${stamp}`,
             role: "assistant",
-            text: `已提取 ${data.items.length} 个事项，发现 ${data.validation.issues.length} 条风险或待确认信息。`,
+            text: formatAssistantExtraction(data),
           },
         ]);
       }
@@ -103,6 +178,30 @@ export default function App() {
       await saveTodos(result.items.map((item) => ({ ...item, status: "todo" })));
       setResult(null);
       setInput("");
+      await refreshHistory();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleManualSubmit(event) {
+    event.preventDefault();
+    if (!manualForm.title.trim()) {
+      setError("请先填写事件。");
+      return;
+    }
+    if (!manualForm.date || !manualForm.startTime) {
+      setError("请选择日期和开始时间。");
+      return;
+    }
+    setIsLoading(true);
+    setError("");
+    try {
+      const item = buildManualTodoItem(manualForm, { timezone: "Asia/Shanghai" });
+      await saveTodos([item]);
+      setManualForm((current) => ({ ...DEFAULT_MANUAL_FORM, date: current.date }));
       await refreshHistory();
     } catch (err) {
       setError(err.message);
@@ -143,13 +242,27 @@ export default function App() {
     setIsLoading(true);
     setError("");
     try {
-      const data = await uploadImage(file);
+      const data = await uploadImageAndExtract(file, {
+        source_type: "截图文字",
+        current_date: "2026-04-19",
+        timezone: "Asia/Shanghai",
+      });
+      const extractedText = data.ocr?.text || "";
+      setResult(data);
+      setInput(extractedText);
+      setSourceType("截图文字");
       if (target === "assistant") {
-        setMessages((current) => [...current, { id: `upload-${Date.now()}`, role: "user", text: `上传截图：${file.name}` }]);
-        await handleExtract(data.text, true);
-      } else {
-        setInput(data.text);
-        setSourceType("截图文字");
+        const stamp = Date.now();
+        const detectedType = data.json_debug?.ocr_preprocess?.detected_type;
+        const assistantText =
+          detectedType === "timetable"
+            ? `已识别为课表类截图。OCR 文本存在行列丢失，建议核对课程时间后再加入待办。\n\n${formatAssistantExtraction(data)}`
+            : formatAssistantExtraction(data);
+        setMessages((current) => [
+          ...current,
+          { id: `upload-${stamp}`, role: "user", text: `上传截图：${file.name}` },
+          { id: `assistant-${stamp}`, role: "assistant", text: assistantText },
+        ]);
       }
     } catch (err) {
       setError(err.message);
@@ -192,9 +305,50 @@ export default function App() {
           </button>
         </nav>
         <div className="rail-note">
-          <span>Harness</span>
-          <p>结构化上下文、外部工具、验证反馈</p>
+          <span>AI 模型设置</span>
+          <p>可在前端临时配置，也可读取 backend/.env。</p>
           <strong>{describeAiExtractor(appConfig)}</strong>
+          <button className="rail-config-button" onClick={() => setAiConfigOpen((current) => !current)}>
+            {aiConfigOpen ? "收起配置" : "前端配置模型"}
+          </button>
+          {aiConfigOpen && (
+            <form className="ai-config-form" onSubmit={handleAiConfigSubmit}>
+              <label>
+                服务类型
+                <input
+                  value={aiConfigForm.provider}
+                  onChange={(event) => setAiConfigForm((current) => ({ ...current, provider: event.target.value }))}
+                />
+              </label>
+              <label>
+                模型名称
+                <input
+                  value={aiConfigForm.model}
+                  onChange={(event) => setAiConfigForm((current) => ({ ...current, model: event.target.value }))}
+                />
+              </label>
+              <label>
+                接口地址
+                <input
+                  value={aiConfigForm.base_url}
+                  onChange={(event) => setAiConfigForm((current) => ({ ...current, base_url: event.target.value }))}
+                />
+              </label>
+              <label>
+                模型密钥
+                <input
+                  type="password"
+                  value={aiConfigForm.api_key}
+                  placeholder="只在本次后端运行期间生效"
+                  onChange={(event) => setAiConfigForm((current) => ({ ...current, api_key: event.target.value }))}
+                />
+              </label>
+              <button type="submit" disabled={isLoading}>
+                {isLoading ? "保存中..." : "保存配置"}
+              </button>
+              {aiConfigMessage && <p>{aiConfigMessage}</p>}
+            </form>
+          )}
         </div>
       </aside>
 
@@ -204,18 +358,13 @@ export default function App() {
           <TodoPage
             now={now}
             progress={progress}
-            input={input}
-            setInput={setInput}
-            sourceType={sourceType}
-            setSourceType={setSourceType}
-            samples={samples}
-            applySample={applySample}
+            manualForm={manualForm}
+            setManualForm={setManualForm}
             result={result}
             history={history}
             isLoading={isLoading}
-            onExtract={() => handleExtract()}
+            onManualSubmit={handleManualSubmit}
             onSave={handleSave}
-            onUpload={(event) => handleUpload(event)}
             onExport={exportIcs}
             onJson={() => setJsonOpen(true)}
             onEditItem={handleEditItem}
@@ -305,38 +454,13 @@ function TodoPage(props) {
 
       <section className="todo-layout">
         <div className="input-panel">
-          <div className="section-title">
-            <h2>新通知处理</h2>
-            <span>输入 → AI 提取 → 自动验证</span>
-          </div>
-          <div className="source-row">
-            {SOURCE_TYPES.map((type) => (
-              <button key={type} className={props.sourceType === type ? "selected" : ""} onClick={() => props.setSourceType(type)}>
-                {type}
-              </button>
-            ))}
-          </div>
-          <textarea
-            value={props.input}
-            onChange={(event) => props.setInput(event.target.value)}
-            placeholder="粘贴微信群通知、短信、课程公告或 OCR 文本..."
+          <ManualTodoForm
+            form={props.manualForm}
+            setForm={props.setManualForm}
+            isLoading={props.isLoading}
+            onSubmit={props.onManualSubmit}
           />
-          <div className="sample-row">
-            {props.samples.map((sample) => (
-              <button key={sample.title} onClick={() => props.applySample(sample)}>
-                {sample.title}
-              </button>
-            ))}
-          </div>
-          <div className="action-row">
-            <label className="file-button">
-              上传截图 OCR
-              <input type="file" accept="image/*" onChange={props.onUpload} />
-            </label>
-            <button className="primary" onClick={props.onExtract} disabled={props.isLoading}>
-              {props.isLoading ? "处理中..." : "AI 提取"}
-            </button>
-          </div>
+          {props.result?.ocr && <OcrSummary ocr={props.result.ocr} />}
           {props.result && <ValidationPanel result={props.result} />}
           {props.result && (
             <ConfirmationEditor
@@ -367,6 +491,69 @@ function TodoPage(props) {
         </div>
       </section>
     </div>
+  );
+}
+
+function ManualTodoForm({ form, setForm, isLoading, onSubmit }) {
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  return (
+    <form className="manual-form" onSubmit={onSubmit}>
+      <div className="section-title">
+        <h2>手动添加待办</h2>
+        <span>事件 / 时间 / 重复 / 四象限</span>
+      </div>
+      <label className="wide">
+        事件
+        <input value={form.title} placeholder="例如：程序设计基础" onChange={(event) => update("title", event.target.value)} />
+      </label>
+      <div className="manual-grid">
+        <label>
+          日期
+          <input type="date" value={form.date} onChange={(event) => update("date", event.target.value)} />
+        </label>
+        <label>
+          开始
+          <input type="time" value={form.startTime} onChange={(event) => update("startTime", event.target.value)} />
+        </label>
+        <label>
+          结束
+          <input type="time" value={form.endTime} onChange={(event) => update("endTime", event.target.value)} />
+        </label>
+      </div>
+      <label className="wide">
+        是否重复
+        <select value={form.recurrence} onChange={(event) => update("recurrence", event.target.value)}>
+          <option value="none">不重复</option>
+          <option value="daily">每天这个时段</option>
+          <option value="weekdays">每个工作日</option>
+          <option value="holidays">每个节假日（初版按周末）</option>
+        </select>
+      </label>
+      <label className="wide">
+        地点
+        <input value={form.location} placeholder="可选，例如：博达校区1号教学楼" onChange={(event) => update("location", event.target.value)} />
+      </label>
+      <label className="wide">
+        备注
+        <textarea value={form.notes} placeholder="可选，例如：带电脑、提前10分钟到" onChange={(event) => update("notes", event.target.value)} />
+      </label>
+      <label className="wide">
+        四象限
+        <select value={form.quadrant} onChange={(event) => update("quadrant", event.target.value)}>
+          {Object.entries(QUADRANTS).map(([key, meta]) => (
+            <option key={key} value={key}>
+              {meta.title}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button className="primary" type="submit" disabled={isLoading}>
+        {isLoading ? "保存中..." : "加入待办清单"}
+      </button>
+    </form>
   );
 }
 
@@ -496,7 +683,7 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
       <section className="chat-panel">
         <header className="section-title">
           <h2>AI 助手</h2>
-          <span>文本交流 / 截图 OCR / 事项确认</span>
+          <span>文本交流 / 截图提取 / 事项确认</span>
         </header>
         <div className="message-list">
           {messages.map((message) => (
@@ -509,7 +696,7 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
           <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="输入通知、问题或需要确认的信息..." />
           <div className="action-row">
             <label className="file-button">
-              上传截图 OCR
+              上传截图并提取
               <input type="file" accept="image/*" onChange={onUpload} />
             </label>
             <button className="primary" onClick={onSend} disabled={isLoading}>
@@ -525,6 +712,7 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
         </header>
         {result ? (
           <>
+            {result.ocr && <OcrSummary ocr={result.ocr} />}
             <ValidationPanel result={result} />
             <pre>{JSON.stringify(result.items[0] || {}, null, 2)}</pre>
           </>
@@ -539,8 +727,7 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
 function TaskRow({ item }) {
   const missing = [];
   if (!item.location) missing.push("缺地点");
-  if (!item.materials?.length) missing.push("缺材料");
-  if (!item.contacts?.length) missing.push("缺联系人");
+  const note = item.notes || (item.materials?.length ? `材料：${item.materials.join("、")}` : "");
   return (
     <article className="task-row">
       <div>
@@ -557,12 +744,12 @@ function TaskRow({ item }) {
           <dd>{item.location || "待确认"}</dd>
         </div>
         <div>
-          <dt>材料</dt>
-          <dd>{item.materials?.length ? item.materials.join("、") : "待确认"}</dd>
+          <dt>重复</dt>
+          <dd>{item.recurrence?.label || "不重复"}</dd>
         </div>
         <div>
-          <dt>联系人</dt>
-          <dd>{item.contacts?.length ? item.contacts.map((contact) => contact.name).join("、") : "待确认"}</dd>
+          <dt>备注</dt>
+          <dd>{note || "无"}</dd>
         </div>
       </dl>
       <div className="task-meta">
@@ -590,6 +777,18 @@ function ValidationPanel({ result }) {
           <li>没有发现明显冲突或缺失字段。</li>
         )}
       </ul>
+    </section>
+  );
+}
+
+function OcrSummary({ ocr }) {
+  return (
+    <section className="ocr-summary">
+      <div>
+        <strong>截图识别与理解</strong>
+        <span>识别可信度 {Math.round((ocr.confidence || 0) * 100)}%</span>
+      </div>
+      <p>{ocr.text || "没有识别出文字"}</p>
     </section>
   );
 }

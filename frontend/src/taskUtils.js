@@ -52,9 +52,84 @@ export function updateQuadrantOverride(overrides, itemId, quadrant) {
 export function describeAiExtractor(config) {
   const extractor = config?.ai_extractor;
   if (extractor?.enabled) {
-    return `AI Harness：${extractor.model || "已启用"}`;
+    return `AI Harness：${extractor.model || "已启用"} · ${extractor.base_url || "默认接口"}`;
   }
-  return "规则兜底：未配置模型";
+  return "规则兜底：配置 backend/.env 启用模型";
+}
+
+export function buildAiConfigPayload(form) {
+  return {
+    provider: String(form.provider || "openai-compatible").trim(),
+    api_key: String(form.api_key || "").trim(),
+    model: String(form.model || "gpt-4o-mini").trim(),
+    base_url: String(form.base_url || "https://api.openai.com/v1")
+      .trim()
+      .replace(/\/+$/, ""),
+  };
+}
+
+export function buildManualTodoItem(form, options = {}) {
+  const now = options.now ?? Date.now();
+  const timezone = options.timezone || "Asia/Shanghai";
+  const recurrence = buildRecurrence(form.recurrence);
+  const start = buildIsoDateTime(form.date, form.startTime);
+  const end = buildIsoDateTime(form.date, form.endTime || form.startTime);
+  return {
+    id: `manual-${now}`,
+    title: String(form.title || "").trim(),
+    time: {
+      start,
+      end: end || start,
+      label: buildManualTimeLabel(form, recurrence),
+    },
+    location: String(form.location || "").trim(),
+    materials: [],
+    contacts: [],
+    notes: String(form.notes || "").trim(),
+    recurrence,
+    evidence: "手动添加",
+    source_type: "手动添加",
+    confidence: 1,
+    quadrant: QUADRANTS[form.quadrant] ? form.quadrant : "important_not_urgent",
+    timezone,
+    status: "todo",
+  };
+}
+
+function buildRecurrence(type = "none") {
+  const rules = {
+    none: { type: "none", label: "不重复", rrule: "" },
+    daily: { type: "daily", label: "每天", rrule: "FREQ=DAILY" },
+    weekdays: { type: "weekdays", label: "每个工作日", rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" },
+    holidays: { type: "holidays", label: "每个节假日", rrule: "FREQ=WEEKLY;BYDAY=SA,SU" },
+  };
+  return rules[type] || rules.none;
+}
+
+function buildIsoDateTime(date, time) {
+  if (!date || !time) return "";
+  const normalizedTime = time.length === 5 ? `${time}:00` : time;
+  return `${date}T${normalizedTime}+08:00`;
+}
+
+function buildManualTimeLabel(form, recurrence) {
+  const timeRange = [form.startTime, form.endTime].filter(Boolean).join("-");
+  const dateText = form.date || "日期待确认";
+  return recurrence.type === "none" ? `${dateText} ${timeRange}`.trim() : `${recurrence.label} ${timeRange}`.trim();
+}
+
+export function formatAssistantExtraction(result) {
+  const items = result?.items || [];
+  if (!items.length) return "没有整理出可执行事项。\n\n时间：待确认\n地点：待确认（可选）\n事件：待确认\n备注：请补充更清晰的通知内容。";
+
+  const blocks = items.map((item, index) => {
+    const timeText = item.time?.label || formatDateTime(item.time?.start);
+    const locationText = item.location || "待确认（可选）";
+    const noteText = buildAssistantNote(item);
+    return [`${index + 1}.`, `事件：${item.title || "待确认"}`, `时间：${timeText}`, `地点：${locationText}`, `备注：${noteText}`].join("\n");
+  });
+
+  return ["已整理为：", ...blocks].join("\n\n");
 }
 
 export function updateEditableItem(items, itemId, patch) {
@@ -70,6 +145,20 @@ export function updateEditableItem(items, itemId, patch) {
     if (Object.keys(patch).length) next.confidence = Math.max(Number(next.confidence || 0), 0.8);
     return next;
   });
+}
+
+function buildAssistantNote(item) {
+  const parts = [];
+  if (item.notes) parts.push(item.notes);
+  else if (item.materials?.length) parts.push(`课程/材料：${item.materials.join("、")}`);
+  if (typeof item.confidence === "number") parts.push(`可信度：${Math.round(item.confidence * 100)}%`);
+  if (!parts.length && item.evidence) parts.push(`依据：${truncateText(item.evidence, 48)}`);
+  return parts.join("；") || "无";
+}
+
+function truncateText(text, maxLength) {
+  const value = String(text || "").trim();
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 }
 
 export function serializeMaterials(materials) {

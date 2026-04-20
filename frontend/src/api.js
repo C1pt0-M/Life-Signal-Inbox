@@ -16,6 +16,14 @@ export function getConfig() {
   return request("/api/config");
 }
 
+export function configureAi(payload) {
+  return request("/api/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getHistory() {
   return request("/api/history");
 }
@@ -48,6 +56,18 @@ export async function uploadImage(file) {
   const formData = new FormData();
   formData.append("file", file);
   return request("/api/ocr", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function uploadImageAndExtract(file, payload = {}) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("source_type", payload.source_type || "截图文字");
+  formData.append("current_date", payload.current_date || "");
+  formData.append("timezone", payload.timezone || "Asia/Shanghai");
+  return request("/api/ocr-extract", {
     method: "POST",
     body: formData,
   });

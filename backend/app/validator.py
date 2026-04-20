@@ -30,7 +30,10 @@ def _check_required_fields(item: dict, issues: list[dict], pending: list[dict]) 
         "materials": "材料",
         "contacts": "联系人",
     }
+    optional_fields = _optional_required_fields(item)
     for field, label in field_labels.items():
+        if field in optional_fields:
+            continue
         value = item.get(field)
         missing = value in ("", None, []) or (isinstance(value, str) and not value.strip())
         if missing:
@@ -50,6 +53,12 @@ def _check_required_fields(item: dict, issues: list[dict], pending: list[dict]) 
                     "question": f"“{item.get('title') or '未命名事项'}”还需要确认{label}。",
                 }
             )
+
+
+def _optional_required_fields(item: dict) -> set[str]:
+    if item.get("kind") == "schedule_course":
+        return {"materials", "contacts"}
+    return set()
 
 
 def _check_time(item: dict, issues: list[dict], pending: list[dict]) -> None:
@@ -138,4 +147,3 @@ def _interval(item: dict) -> tuple[datetime, datetime] | None:
 def _issue_penalty(issues: list[dict]) -> int:
     weights = {"high": 18, "medium": 9, "low": 4}
     return sum(weights.get(issue.get("severity"), 6) for issue in issues)
-
