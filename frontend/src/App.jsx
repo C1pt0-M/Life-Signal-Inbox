@@ -1,13 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-import { exportIcs, extractNotice, getHistory, getSamples, saveTodos, uploadImage } from "./api.js";
+import { exportIcs, extractNotice, getConfig, getHistory, getSamples, saveTodos, uploadImage, validateTodos } from "./api.js";
 import {
   applyQuadrantOverrides,
   calculateProgress,
+  describeAiExtractor,
   formatDateTime,
   formatFullNow,
   groupByQuadrant,
   QUADRANTS,
+  serializeContacts,
+  serializeMaterials,
+  updateEditableItem,
   updateQuadrantOverride,
 } from "./taskUtils.js";
 
@@ -28,12 +32,14 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState("2026-04-20");
   const [draggedItemId, setDraggedItemId] = useState("");
   const [quadrantOverrides, setQuadrantOverrides] = useState(loadQuadrantOverrides);
+  const [appConfig, setAppConfig] = useState(null);
   const [messages, setMessages] = useState([
     { id: "intro", role: "assistant", text: "把通知、截图文字或需要确认的信息发给我，我会整理成待办和待确认项。" },
   ]);
 
   useEffect(() => {
     getSamples().then(setSamples).catch(() => setSamples([]));
+    getConfig().then(setAppConfig).catch(() => setAppConfig(null));
     refreshHistory();
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
@@ -105,6 +111,32 @@ export default function App() {
     }
   }
 
+  function handleEditItem(itemId, patch) {
+    setResult((current) => {
+      if (!current) return current;
+      const items = updateEditableItem(current.items, itemId, patch);
+      return {
+        ...current,
+        items,
+        context: current.context ? { ...current.context, recognized_items: items } : current.context,
+      };
+    });
+  }
+
+  async function handleRevalidate() {
+    if (!result?.items?.length) return;
+    setIsLoading(true);
+    setError("");
+    try {
+      const data = await validateTodos(result.items);
+      setResult((current) => (current ? { ...current, validation: data.validation } : current));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   async function handleUpload(event, target = "input") {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -162,6 +194,7 @@ export default function App() {
         <div className="rail-note">
           <span>Harness</span>
           <p>结构化上下文、外部工具、验证反馈</p>
+          <strong>{describeAiExtractor(appConfig)}</strong>
         </div>
       </aside>
 
@@ -185,6 +218,8 @@ export default function App() {
             onUpload={(event) => handleUpload(event)}
             onExport={exportIcs}
             onJson={() => setJsonOpen(true)}
+            onEditItem={handleEditItem}
+            onRevalidate={handleRevalidate}
           />
         )}
         {activePage === "quadrants" && (
@@ -303,6 +338,15 @@ function TodoPage(props) {
             </button>
           </div>
           {props.result && <ValidationPanel result={props.result} />}
+          {props.result && (
+            <ConfirmationEditor
+              items={props.result.items}
+              pendingConfirmations={props.result.validation.pending_confirmations}
+              isLoading={props.isLoading}
+              onEditItem={props.onEditItem}
+              onRevalidate={props.onRevalidate}
+            />
+          )}
         </div>
 
         <div className="todo-panel">
@@ -323,6 +367,69 @@ function TodoPage(props) {
         </div>
       </section>
     </div>
+  );
+}
+
+function ConfirmationEditor({ items, pendingConfirmations, isLoading, onEditItem, onRevalidate }) {
+  const pendingIds = new Set(pendingConfirmations.map((item) => item.item_id));
+  const editableItems = items.filter((item) => pendingIds.has(item.id));
+  if (!editableItems.length) {
+    return (
+      <section className="confirmation-editor clean">
+        <strong>待确认项</strong>
+        <p>当前结构化结果没有待确认字段。</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="confirmation-editor">
+      <div className="editor-head">
+        <div>
+          <strong>待确认项编辑</strong>
+          <p>补齐字段后重新验证，再加入待办清单。</p>
+        </div>
+        <button onClick={onRevalidate} disabled={isLoading}>
+          {isLoading ? "验证中..." : "重新验证"}
+        </button>
+      </div>
+      {editableItems.map((item) => (
+        <article key={item.id}>
+          <label>
+            标题
+            <input value={item.title || ""} onChange={(event) => onEditItem(item.id, { title: event.target.value })} />
+          </label>
+          <label>
+            时间
+            <input
+              value={item.time?.start || ""}
+              placeholder="2026-04-20T09:00:00+08:00"
+              onChange={(event) => onEditItem(item.id, { start: event.target.value })}
+            />
+          </label>
+          <label>
+            地点
+            <input value={item.location || ""} onChange={(event) => onEditItem(item.id, { location: event.target.value })} />
+          </label>
+          <label>
+            材料
+            <input
+              value={serializeMaterials(item.materials)}
+              placeholder="身份证、水杯"
+              onChange={(event) => onEditItem(item.id, { materialsText: event.target.value })}
+            />
+          </label>
+          <label>
+            联系人
+            <input
+              value={serializeContacts(item.contacts)}
+              placeholder="王老师 13800138000"
+              onChange={(event) => onEditItem(item.id, { contactsText: event.target.value })}
+            />
+          </label>
+        </article>
+      ))}
+    </section>
   );
 }
 

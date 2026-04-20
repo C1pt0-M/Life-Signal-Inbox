@@ -49,6 +49,59 @@ export function updateQuadrantOverride(overrides, itemId, quadrant) {
   return { ...overrides, [itemId]: quadrant };
 }
 
+export function describeAiExtractor(config) {
+  const extractor = config?.ai_extractor;
+  if (extractor?.enabled) {
+    return `AI Harness：${extractor.model || "已启用"}`;
+  }
+  return "规则兜底：未配置模型";
+}
+
+export function updateEditableItem(items, itemId, patch) {
+  return items.map((item) => {
+    if (item.id !== itemId) return item;
+    const next = { ...item, time: { ...(item.time || {}) } };
+    if ("title" in patch) next.title = patch.title;
+    if ("location" in patch) next.location = patch.location;
+    if ("start" in patch) next.time.start = patch.start;
+    if ("end" in patch) next.time.end = patch.end;
+    if ("materialsText" in patch) next.materials = parseMaterials(patch.materialsText);
+    if ("contactsText" in patch) next.contacts = parseContacts(patch.contactsText);
+    if (Object.keys(patch).length) next.confidence = Math.max(Number(next.confidence || 0), 0.8);
+    return next;
+  });
+}
+
+export function serializeMaterials(materials) {
+  return (materials || []).join("、");
+}
+
+export function serializeContacts(contacts) {
+  return (contacts || [])
+    .map((contact) => [contact.name, contact.phone].filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join("、");
+}
+
+function parseMaterials(value) {
+  return String(value || "")
+    .split(/[、,，;\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseContacts(value) {
+  return String(value || "")
+    .split(/[、,，;；]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const phone = part.match(/1[3-9]\d{9}/)?.[0] || "";
+      const name = part.replace(phone, "").trim() || (phone ? "联系人" : part);
+      return { name, phone };
+    });
+}
+
 export function formatDateTime(value) {
   if (!value) return "待确认";
   return new Intl.DateTimeFormat("zh-CN", {

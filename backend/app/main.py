@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from .ai_extractor import get_ai_config_status
 from .extractor import build_context, extract_life_items
 from .ics import build_ics
 from .ocr import extract_text_from_image
@@ -39,6 +40,11 @@ class SaveRequest(BaseModel):
     items: list[dict]
 
 
+class ValidateRequest(BaseModel):
+    items: list[dict]
+    historical_items: list[dict] | None = None
+
+
 SAMPLES = [
     {
         "title": "家长群通知",
@@ -68,6 +74,11 @@ def samples() -> list[dict]:
     return SAMPLES
 
 
+@app.get("/api/config")
+def config() -> dict:
+    return {"ai_extractor": get_ai_config_status()}
+
+
 @app.get("/api/history")
 def history() -> list[dict]:
     return store.list_items()
@@ -95,6 +106,12 @@ def save_todos(request: SaveRequest) -> dict:
     return {"saved": saved, "validation": validation}
 
 
+@app.post("/api/validate")
+def validate_todos(request: ValidateRequest) -> dict:
+    history_items = request.historical_items if request.historical_items is not None else store.list_items()
+    return {"validation": validate_items(request.items, history_items)}
+
+
 @app.get("/api/export.ics")
 def export_ics() -> Response:
     content = build_ics(store.list_items())
@@ -109,4 +126,3 @@ def export_ics() -> Response:
 async def ocr(file: UploadFile = File(...)) -> dict:
     content = await file.read()
     return extract_text_from_image(file.filename or "upload.png", content)
-

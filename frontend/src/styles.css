@@ -112,6 +112,16 @@ button:disabled {
   font-weight: 700;
 }
 
+.rail-note strong {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 6px 8px;
+  border: 1px solid #33382e;
+  border-radius: 8px;
+  color: #e8f2df;
+  font-size: 12px;
+}
+
 .workspace {
   padding: 24px;
 }
@@ -363,6 +373,57 @@ dd {
 .validation-panel ul {
   margin: 10px 0 0;
   padding-left: 18px;
+}
+
+.confirmation-editor {
+  margin-top: 14px;
+  border: 1px solid #cddde8;
+  background: #f4f9fb;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.confirmation-editor.clean {
+  background: #f5faf4;
+  border-color: #cfe0d2;
+}
+
+.confirmation-editor.clean p,
+.confirmation-editor .editor-head p {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.editor-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.confirmation-editor article {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #dce8ef;
+  padding-top: 12px;
+}
+
+.confirmation-editor label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.confirmation-editor input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: #fff;
+  outline-color: var(--blue);
 }
 
 .quadrant-grid {

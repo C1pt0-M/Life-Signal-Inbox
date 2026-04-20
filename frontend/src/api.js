@@ -12,6 +12,10 @@ export function getSamples() {
   return request("/api/samples");
 }
 
+export function getConfig() {
+  return request("/api/config");
+}
+
 export function getHistory() {
   return request("/api/history");
 }
@@ -32,6 +36,14 @@ export function saveTodos(items) {
   });
 }
 
+export function validateTodos(items) {
+  return request("/api/validate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items, historical_items: [] }),
+  });
+}
+
 export async function uploadImage(file) {
   const formData = new FormData();
   formData.append("file", file);
@@ -44,4 +56,3 @@ export async function uploadImage(file) {
 export function exportIcs() {
   window.location.href = `${API_BASE}/api/export.ics`;
 }
-

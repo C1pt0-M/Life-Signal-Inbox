@@ -1,7 +1,10 @@
 from datetime import datetime
 
+from fastapi.testclient import TestClient
+
 from app.extractor import build_context, extract_life_items
 from app.ics import build_ics
+from app.main import app
 from app.storage import JsonHistoryStore
 from app.validator import validate_items
 
@@ -114,3 +117,35 @@ def test_history_store_roundtrip(tmp_path):
 
     assert saved[0]["title"] == "周末志愿者报名"
     assert store.list_items()[0]["id"] == "item-1"
+
+
+def test_config_endpoint_reports_ai_extractor_mode():
+    client = TestClient(app)
+
+    response = client.get("/api/config")
+
+    assert response.status_code == 200
+    assert "ai_extractor" in response.json()
+
+
+def test_validate_endpoint_rechecks_edited_items():
+    client = TestClient(app)
+    item = {
+        "id": "edited-1",
+        "title": "社区登记",
+        "time": {"start": "2026-04-20T09:00:00+08:00", "end": "2026-04-20T10:00:00+08:00"},
+        "location": "社区中心",
+        "materials": ["身份证"],
+        "contacts": [{"name": "社区工作人员", "phone": ""}],
+        "confidence": 0.84,
+        "evidence": "明天上午9点社区中心登记，请带身份证。",
+        "source_type": "社区公告",
+        "quadrant": "important_urgent",
+    }
+
+    response = client.post("/api/validate", json={"items": [item], "historical_items": []})
+
+    assert response.status_code == 200
+    assert response.json()["validation"]["score"] == 100
+    assert response.json()["validation"]["pending_confirmations"] == []
+
