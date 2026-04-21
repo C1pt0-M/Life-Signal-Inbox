@@ -9,3 +9,4 @@ logs/
 .env
 .venv/
 test_pic/
+/Git规范.md
