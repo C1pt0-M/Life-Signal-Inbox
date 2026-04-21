@@ -198,7 +198,12 @@ def extract_with_ai(context: dict, ai_client: AIClient, max_repairs: int = 1) ->
         repaired = True
         messages = build_repair_messages(context, items, validation)
 
-    raise AIExtractionError("ai_repair_failed", f"AI extraction failed: {last_validation}")
+    # Return partial data instead of raising an error, let the frontend UI handle the blockers.
+    return {
+        "context": context,
+        "items": [],
+        "json_debug": {"extractor": "ai_harness_v1", "error": "failed_all_repairs"},
+    }
 
 
 def extract_with_vision(context: dict, filename: str, content: bytes, ai_client: AIClient, max_repairs: int = 1) -> dict:
@@ -217,6 +222,9 @@ def extract_with_vision(context: dict, filename: str, content: bytes, ai_client:
         validation = validate_items(items, context.get("historical_items") or [])
         last_validation = validation
 
+        # For vision, we are more tolerant. Even if there are blockers, 
+        # after we exhaust repair attempts, we return the partial data 
+        # instead of throwing an error, letting the user fix it in the UI.
         if not validation["has_blockers"] or attempts > max_repairs:
             return {
                 "context": {**context, "recognized_items": items},
@@ -235,7 +243,13 @@ def extract_with_vision(context: dict, filename: str, content: bytes, ai_client:
         repaired = True
         messages = build_repair_messages(context, items, validation)
 
-    raise AIExtractionError("vision_repair_failed", f"Vision extraction failed: {last_validation}")
+    # This should logically not be reached due to the `attempts > max_repairs` check above,
+    # but kept as an ultimate fallback if something weird happens.
+    return {
+        "context": context,
+        "items": [],
+        "json_debug": {"extractor": "vision_harness_v1", "error": "failed_all_repairs"},
+    }
 
 
 def build_ai_messages(context: dict) -> list[dict]:
