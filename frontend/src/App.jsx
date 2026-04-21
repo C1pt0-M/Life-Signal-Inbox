@@ -19,7 +19,9 @@ import {
   buildCalendarMonth,
   buildExtractionPayload,
   buildManualTodoItem,
+  buildSaveableAssistantItem,
   buildSaveableAssistantItems,
+  buildTodoFormState,
   buildTodoUpdate,
   calculateProgress,
   calculateTodoOverview,
@@ -47,6 +49,7 @@ const DEFAULT_MANUAL_FORM = {
   date: todayInputValue(),
   startTime: "09:00",
   endTime: "10:00",
+  durationDays: "1",
   recurrence: "none",
   location: "",
   notes: "",
@@ -86,7 +89,6 @@ export default function App() {
   const [sourceType, setSourceType] = useState("微信群");
   const [result, setResult] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [jsonOpen, setJsonOpen] = useState(false);
   const [error, setError] = useState("");
   const [selectedDate, setSelectedDate] = useState(todayInputValue());
   const [calendarCursor, setCalendarCursor] = useState(() => currentCalendarCursor());
@@ -240,25 +242,39 @@ export default function App() {
     }
   }
 
-  async function handleAssistantSave() {
-    if (!result?.items?.length) return;
+  async function handleAssistantSaveOne(itemId) {
+    const item = result?.items?.find((candidate) => candidate.id === itemId);
+    if (!item) return;
     setIsLoading(true);
     setError("");
     try {
-      const items = buildSaveableAssistantItems(result.items);
-      await saveTodos(items);
+      await saveTodos([buildSaveableAssistantItem(item)]);
       await refreshHistory();
+      const remaining = result.items.filter((candidate) => candidate.id !== itemId);
+      if (remaining.length) {
+        const validation = await validateTodos(remaining);
+        setResult((current) =>
+          current
+            ? {
+                ...current,
+                items: remaining,
+                context: current.context ? { ...current.context, recognized_items: remaining } : current.context,
+                validation: validation.validation,
+              }
+            : current
+        );
+      } else {
+        setResult(null);
+      }
       const stamp = Date.now();
       setMessages((current) => [
         ...current,
         {
-          id: `assistant-save-${stamp}`,
+          id: `assistant-save-one-${stamp}`,
           role: "assistant",
-          text: `已加入待办清单：${items.length} 个事项。`,
+          text: `已加入待办清单：${item.title}。`,
         },
       ]);
-      setResult(null);
-      setInput("");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -422,8 +438,6 @@ export default function App() {
       });
       const extractedText = data.ocr?.text || "";
       setResult(data);
-      setInput(extractedText);
-      setSourceType("截图文字");
       if (target === "assistant") {
         const stamp = Date.now();
         const detectedType = data.json_debug?.ocr_preprocess?.detected_type;
@@ -542,7 +556,6 @@ export default function App() {
             onDeleteTodo={handleDeleteTodo}
             onSave={handleSave}
             onExport={exportIcs}
-            onJson={() => setJsonOpen(true)}
             onEditItem={handleEditItem}
             onRevalidate={handleRevalidate}
           />
@@ -582,7 +595,8 @@ export default function App() {
             onSend={() => handleExtract(input, true)}
             onUpload={(event) => handleUpload(event, "assistant")}
             onPaste={handleAssistantPaste}
-            onSave={handleAssistantSave}
+            onEditItem={handleEditItem}
+            onSaveOne={handleAssistantSaveOne}
           />
         )}
       </section>
@@ -602,49 +616,12 @@ export default function App() {
         />
       )}
 
-      {jsonOpen && (
-        <div
-          className="modal-backdrop"
-          role="button"
-          tabIndex={0}
-          aria-label="关闭 JSON 弹窗"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setJsonOpen(false);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape" || event.key === "Enter") setJsonOpen(false);
-          }}
-        >
-          <section className="json-modal" role="dialog" aria-modal="true">
-            <header>
-              <h2>结构化 JSON</h2>
-              <button className="btn-fabric btn-fabric-secondary" onClick={() => setJsonOpen(false)}>
-                <span className="btn-bg"></span>关闭
-              </button>
-            </header>
-            <pre>{JSON.stringify(result || { history }, null, 2)}</pre>
-          </section>
-        </div>
-      )}
     </main>
   );
 }
 
 function todoToForm(item) {
-  const start = item.time?.start || "";
-  const end = item.time?.end || "";
-  return {
-    title: item.title || "",
-    date: start ? start.slice(0, 10) : todayInputValue(),
-    startTime: start ? start.slice(11, 16) : "09:00",
-    endTime: end ? end.slice(11, 16) : "10:00",
-    recurrence: item.recurrence?.type || "none",
-    reminder: String(item.reminder?.minutes_before ?? 0),
-    location: item.location || "",
-    notes: item.notes || "",
-    quadrant: item.quadrant || "important_not_urgent",
-    status: item.status || "todo",
-  };
+  return buildTodoFormState(item, todayInputValue());
 }
 
 function TodoPage(props) {
@@ -714,10 +691,6 @@ function TodoPage(props) {
             <button className="btn-fabric btn-fabric-secondary" onClick={props.onExport}>
               <span className="btn-bg"></span>
               导出 ICS
-            </button>
-            <button className="btn-fabric btn-fabric-secondary" onClick={props.onJson}>
-              <span className="btn-bg"></span>
-              查看 JSON
             </button>
           </div>
           <div className="todo-list">
@@ -856,6 +829,10 @@ function ManualTodoForm({ form, setForm, isLoading, onSubmit }) {
         </label>
       </div>
       <label className="wide">
+        持续天数
+        <input type="number" min="1" step="1" value={form.durationDays || "1"} onChange={(event) => update("durationDays", event.target.value)} />
+      </label>
+      <label className="wide">
         是否重复
         <select value={form.recurrence} onChange={(event) => update("recurrence", event.target.value)}>
           <option value="none">不重复</option>
@@ -929,6 +906,10 @@ function EditTodoForm({ form, setForm, isLoading, onSubmit, onCancel }) {
           <input type="time" value={form.endTime} onChange={(event) => update("endTime", event.target.value)} />
         </label>
       </div>
+      <label className="wide">
+        持续天数
+        <input type="number" min="1" step="1" value={form.durationDays || "1"} onChange={(event) => update("durationDays", event.target.value)} />
+      </label>
       <label className="wide">
         是否重复
         <select value={form.recurrence} onChange={(event) => update("recurrence", event.target.value)}>
@@ -1239,7 +1220,7 @@ function CalendarDetailModal({ entry, editMode, editForm, setEditForm, isLoading
   );
 }
 
-function AssistantPage({ messages, result, input, setInput, isLoading, onSend, onUpload, onPaste, onSave }) {
+function AssistantPage({ messages, result, input, setInput, isLoading, onSend, onUpload, onPaste, onEditItem, onSaveOne }) {
   return (
     <div className="assistant-layout">
       <section className="chat-panel">
@@ -1283,26 +1264,141 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
             {result.ocr && <OcrSummary ocr={result.ocr} />}
             <ValidationPanel result={result} />
             <div className="assistant-result-actions">
-              {result.items?.length ? (
-                <button className="btn-fabric" onClick={onSave}>
-                  <span className="btn-bg"></span>
-                  {isLoading ? "加入中..." : "加入待办清单"}
-                </button>
-              ) : (
-                <button className="btn-fabric btn-fabric-secondary" disabled>
-                  <span className="btn-bg"></span>
-                  没有可加入事项
-                </button>
-              )}
               <span>{result.items?.length || 0} 个事项待加入</span>
             </div>
-            <pre>{JSON.stringify(result.items[0] || {}, null, 2)}</pre>
+            <div className="sorting-list">
+              {result.items.map((item) => (
+                <AssistantItemCard key={item.id} item={item} isLoading={isLoading} onEditItem={onEditItem} onSaveOne={onSaveOne} />
+              ))}
+            </div>
           </>
         ) : (
-          <EmptyState text="提取后会在这里显示 JSON、可信度和待确认项。" />
+          <EmptyState text="提取后会在这里显示逐项分拣结果，支持修改后单独加入待办。" />
         )}
       </aside>
     </div>
+  );
+}
+
+function AssistantItemCard({ item, isLoading, onEditItem, onSaveOne }) {
+  const [form, setForm] = useState(() => buildTodoFormState(item, todayInputValue()));
+
+  useEffect(() => {
+    setForm(buildTodoFormState(item, todayInputValue()));
+  }, [item]);
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function syncToParent(nextForm) {
+    const nextItem = buildTodoUpdate(item, nextForm);
+    onEditItem(item.id, {
+      title: nextItem.title,
+      location: nextItem.location,
+      notes: nextItem.notes,
+      start: nextItem.time.start,
+      end: nextItem.time.end,
+    });
+  }
+
+  return (
+    <article className="assistant-item-card">
+      <label>
+        事件
+        <input
+          value={form.title}
+          onChange={(event) => {
+            const nextForm = { ...form, title: event.target.value };
+            update("title", event.target.value);
+            syncToParent(nextForm);
+          }}
+        />
+      </label>
+      <div className="manual-grid">
+        <label>
+          日期
+          <input
+            type="date"
+            value={form.date}
+            onChange={(event) => {
+              const nextForm = { ...form, date: event.target.value };
+              update("date", event.target.value);
+              syncToParent(nextForm);
+            }}
+          />
+        </label>
+        <label>
+          开始
+          <input
+            type="time"
+            value={form.startTime}
+            onChange={(event) => {
+              const nextForm = { ...form, startTime: event.target.value };
+              update("startTime", event.target.value);
+              syncToParent(nextForm);
+            }}
+          />
+        </label>
+        <label>
+          结束
+          <input
+            type="time"
+            value={form.endTime}
+            onChange={(event) => {
+              const nextForm = { ...form, endTime: event.target.value };
+              update("endTime", event.target.value);
+              syncToParent(nextForm);
+            }}
+          />
+        </label>
+      </div>
+      <label>
+        持续天数
+        <input
+          type="number"
+          min="1"
+          step="1"
+          value={form.durationDays || "1"}
+          onChange={(event) => {
+            const nextForm = { ...form, durationDays: event.target.value };
+            update("durationDays", event.target.value);
+            syncToParent(nextForm);
+          }}
+        />
+      </label>
+      <label>
+        地点
+        <input
+          value={form.location}
+          onChange={(event) => {
+            const nextForm = { ...form, location: event.target.value };
+            update("location", event.target.value);
+            syncToParent(nextForm);
+          }}
+        />
+      </label>
+      <label>
+        备注
+        <textarea
+          value={form.notes}
+          placeholder="可选备注"
+          onChange={(event) => {
+            const nextForm = { ...form, notes: event.target.value };
+            update("notes", event.target.value);
+            syncToParent(nextForm);
+          }}
+        />
+      </label>
+      <div className="assistant-item-meta">
+        <span>可信度 {Math.round((item.confidence || 0) * 100)}%</span>
+        <span>{item.source_type}</span>
+      </div>
+      <button className="btn-fabric" onClick={() => onSaveOne(item.id)} disabled={isLoading}>
+        <span className="btn-bg"></span>
+        {isLoading ? "加入中..." : "加入待办清单"}
+      </button>
+    </article>
   );
 }
 

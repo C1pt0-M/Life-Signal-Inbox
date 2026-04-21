@@ -35,14 +35,15 @@ export function calculateTodoOverview(items, now = new Date()) {
   return pending.reduce(
     (summary, item) => {
       const startTime = itemStartDate(item);
-      if (!startTime) {
+      const endTime = itemEndDate(item) || startTime;
+      if (!startTime || !endTime) {
         summary.noTime += 1;
         return summary;
       }
       const date = todayInTimezone(startTime);
-      if (startTime.getTime() < now.getTime()) summary.overdue += 1;
+      if (endTime.getTime() < now.getTime()) summary.overdue += 1;
       else if (date === today) summary.today += 1;
-      if (date >= start && date <= end && startTime.getTime() >= now.getTime()) summary.week += 1;
+      if (date >= start && date <= end && endTime.getTime() >= now.getTime()) summary.week += 1;
       return summary;
     },
     { today: 0, overdue: 0, week: 0, noTime: 0 }
@@ -134,15 +135,17 @@ export function buildManualTodoItem(form, options = {}) {
   const timezone = options.timezone || "Asia/Shanghai";
   const recurrence = buildRecurrence(form.recurrence);
   const reminder = buildReminder(form.reminder);
+  const durationDays = normalizeDurationDays(form.durationDays);
   const start = buildIsoDateTime(form.date, form.startTime);
-  const end = buildIsoDateTime(form.date, form.endTime || form.startTime);
+  const endDate = shiftDateString(form.date, durationDays - 1);
+  const end = buildIsoDateTime(endDate, form.endTime || form.startTime);
   return {
     id: `manual-${now}`,
     title: String(form.title || "").trim(),
     time: {
       start,
       end: end || start,
-      label: buildManualTimeLabel(form, recurrence),
+      label: buildManualTimeLabel(form, recurrence, durationDays),
     },
     location: String(form.location || "").trim(),
     materials: [],
@@ -154,20 +157,47 @@ export function buildManualTodoItem(form, options = {}) {
     source_type: "手动添加",
     confidence: 1,
     quadrant: QUADRANTS[form.quadrant] ? form.quadrant : "important_not_urgent",
+    duration_days: durationDays,
     timezone,
     status: "todo",
   };
 }
 
+export function buildSaveableAssistantItem(item) {
+  return { ...item, status: "todo" };
+}
+
 export function buildSaveableAssistantItems(items) {
-  return (items || []).map((item) => ({ ...item, status: "todo" }));
+  return (items || []).map(buildSaveableAssistantItem);
+}
+
+export function buildTodoFormState(item, fallbackDate = todayInTimezone()) {
+  const start = item.time?.start || "";
+  const end = item.time?.end || "";
+  const parseClock = (value, fallback) => (String(value || "").length >= 16 ? String(value).slice(11, 16) : fallback);
+  const inferredDuration = inferDurationDays(start, end);
+  return {
+    title: item.title || "",
+    date: start ? String(start).slice(0, 10) : fallbackDate,
+    startTime: parseClock(start, "09:00"),
+    endTime: parseClock(end, "10:00"),
+    durationDays: String(item.duration_days || inferredDuration || 1),
+    recurrence: item.recurrence?.type || "none",
+    reminder: String(item.reminder?.minutes_before ?? 0),
+    location: item.location || "",
+    notes: item.notes || "",
+    quadrant: item.quadrant || "important_not_urgent",
+    status: item.status || "todo",
+  };
 }
 
 export function buildTodoUpdate(item, form) {
   const recurrence = buildRecurrence(form.recurrence || item.recurrence?.type);
   const reminder = buildReminder(form.reminder ?? item.reminder?.minutes_before);
+  const durationDays = normalizeDurationDays(form.durationDays ?? item.duration_days);
   const start = buildIsoDateTime(form.date, form.startTime);
-  const end = buildIsoDateTime(form.date, form.endTime || form.startTime);
+  const endDate = shiftDateString(form.date, durationDays - 1);
+  const end = buildIsoDateTime(endDate, form.endTime || form.startTime);
   return {
     ...item,
     title: String(form.title ?? item.title ?? "").trim(),
@@ -175,13 +205,14 @@ export function buildTodoUpdate(item, form) {
       ...(item.time || {}),
       start: start || item.time?.start || "",
       end: end || item.time?.end || start || "",
-      label: buildManualTimeLabel(form, recurrence),
+      label: buildManualTimeLabel(form, recurrence, durationDays),
     },
     location: String(form.location ?? item.location ?? "").trim(),
     notes: String(form.notes ?? item.notes ?? "").trim(),
     recurrence,
     reminder,
     quadrant: QUADRANTS[form.quadrant] ? form.quadrant : item.quadrant || "important_not_urgent",
+    duration_days: durationDays,
     status: form.status || item.status || "todo",
   };
 }
@@ -211,16 +242,25 @@ export function expandCalendarItems(items, visibleStart, visibleEnd) {
   for (const item of items) {
     const itemDate = parseDateOnly(item.time?.start?.slice(0, 10));
     if (!itemDate) continue;
+    const itemEndDate = parseDateOnly(item.time?.end?.slice(0, 10)) || itemDate;
     const recurrenceType = item.recurrence?.type || "none";
     if (recurrenceType === "none") {
-      if (isWithinDateRange(itemDate, start, end)) occurrences.push(buildOccurrence(item, itemDate));
+      let cursor = itemDate > start ? itemDate : start;
+      while (cursor <= end && cursor <= itemEndDate) {
+        if (cursor >= itemDate) occurrences.push(buildOccurrence(item, cursor));
+        cursor = addDays(cursor, 1);
+      }
       continue;
     }
 
     let cursor = itemDate > start ? itemDate : start;
     while (cursor <= end) {
       if (cursor >= itemDate && matchesRecurrence(cursor, recurrenceType)) {
-        occurrences.push(buildOccurrence(item, cursor));
+        for (let day = 0; day < normalizeDurationDays(item.duration_days); day += 1) {
+          const occurrenceDate = addDays(cursor, day);
+          if (occurrenceDate > end) break;
+          occurrences.push(buildOccurrence(item, occurrenceDate));
+        }
       }
       cursor = addDays(cursor, 1);
     }
@@ -263,11 +303,12 @@ export function getDueReminders(items, now = new Date(), seenKeys = new Set()) {
 
 function itemTimeScope(item, now) {
   const startTime = itemStartDate(item);
-  if (!startTime) return "no_time";
+  const endTime = itemEndDate(item) || startTime;
+  if (!startTime || !endTime) return "no_time";
   const date = todayInTimezone(startTime);
   const today = todayInTimezone(now);
   const { start, end } = weekRangeForDate(today);
-  if (startTime.getTime() < now.getTime()) return "overdue";
+  if (endTime.getTime() < now.getTime()) return "overdue";
   if (date >= start && date <= end) return "week";
   if (date === today) return "today";
   return "future";
@@ -293,6 +334,13 @@ function itemStartDate(item) {
   const start = item?.time?.start;
   if (!start) return null;
   const parsed = new Date(start);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function itemEndDate(item) {
+  const end = item?.time?.end;
+  if (!end) return null;
+  const parsed = new Date(end);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
@@ -387,10 +435,32 @@ function buildIsoDateTime(date, time) {
   return `${date}T${normalizedTime}+08:00`;
 }
 
-function buildManualTimeLabel(form, recurrence) {
+function buildManualTimeLabel(form, recurrence, durationDays = 1) {
   const timeRange = [form.startTime, form.endTime].filter(Boolean).join("-");
   const dateText = form.date || "日期待确认";
+  if (durationDays > 1) {
+    const endDate = shiftDateString(form.date, durationDays - 1);
+    return `${dateText} 至 ${endDate} ${timeRange}`.trim();
+  }
   return recurrence.type === "none" ? `${dateText} ${timeRange}`.trim() : `${recurrence.label} ${timeRange}`.trim();
+}
+
+function normalizeDurationDays(value) {
+  const days = Number(value || 1);
+  return Number.isFinite(days) && days > 0 ? Math.floor(days) : 1;
+}
+
+function shiftDateString(dateString, offsetDays) {
+  const parsed = parseDateOnly(dateString);
+  if (!parsed) return dateString;
+  return formatDateOnly(addDays(parsed, offsetDays));
+}
+
+function inferDurationDays(start, end) {
+  const startDate = parseDateOnly(String(start || "").slice(0, 10));
+  const endDate = parseDateOnly(String(end || "").slice(0, 10));
+  if (!startDate || !endDate) return 1;
+  return Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1);
 }
 
 export function formatAssistantExtraction(result) {
@@ -413,6 +483,7 @@ export function updateEditableItem(items, itemId, patch) {
     const next = { ...item, time: { ...(item.time || {}) } };
     if ("title" in patch) next.title = patch.title;
     if ("location" in patch) next.location = patch.location;
+    if ("notes" in patch) next.notes = patch.notes;
     if ("start" in patch) next.time.start = patch.start;
     if ("end" in patch) next.time.end = patch.end;
     if ("materialsText" in patch) next.materials = parseMaterials(patch.materialsText);

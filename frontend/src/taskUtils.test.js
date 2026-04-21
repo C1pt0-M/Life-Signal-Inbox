@@ -9,7 +9,9 @@ import {
   buildCalendarMonth,
   buildExtractionPayload,
   buildManualTodoItem,
+  buildSaveableAssistantItem,
   buildSaveableAssistantItems,
+  buildTodoFormState,
   buildTodoUpdate,
   calculateTodoOverview,
   expandCalendarItems,
@@ -261,6 +263,7 @@ test("buildManualTodoItem creates structured todo with recurrence and notes", ()
       date: "2026-04-21",
       startTime: "09:00",
       endTime: "10:30",
+      durationDays: "1",
       recurrence: "weekdays",
       reminder: "30",
       location: "博达校区1号教学楼",
@@ -287,6 +290,28 @@ test("buildManualTodoItem creates structured todo with recurrence and notes", ()
   assert.equal(item.confidence, 1);
 });
 
+test("buildManualTodoItem extends end date by duration days", () => {
+  const item = buildManualTodoItem(
+    {
+      title: "旧物募集",
+      date: "2026-04-22",
+      startTime: "09:00",
+      endTime: "18:00",
+      durationDays: "4",
+      recurrence: "none",
+      reminder: "0",
+      location: "学院楼122",
+      notes: "",
+      quadrant: "important_not_urgent",
+    },
+    { now: 1234567890, timezone: "Asia/Shanghai" }
+  );
+
+  assert.equal(item.time.start, "2026-04-22T09:00:00+08:00");
+  assert.equal(item.time.end, "2026-04-25T18:00:00+08:00");
+  assert.equal(item.duration_days, 4);
+});
+
 test("buildSaveableAssistantItems marks extracted items as todo", () => {
   const items = buildSaveableAssistantItems([
     { id: "ai-1", title: "报名确认", status: "pending" },
@@ -294,6 +319,33 @@ test("buildSaveableAssistantItems marks extracted items as todo", () => {
   ]);
 
   assert.deepEqual(items.map((item) => item.status), ["todo", "todo"]);
+});
+
+test("buildSaveableAssistantItem marks one extracted item as todo", () => {
+  const item = buildSaveableAssistantItem({ id: "ai-1", title: "报名确认", status: "pending" });
+
+  assert.equal(item.id, "ai-1");
+  assert.equal(item.status, "todo");
+});
+
+test("buildTodoFormState normalizes date-only items for editing", () => {
+  const form = buildTodoFormState(
+    {
+      title: "讲座",
+      time: { start: "2026-04-21", end: "2026-04-21" },
+      recurrence: { type: "none" },
+      reminder: { minutes_before: 0 },
+      location: "",
+      notes: "",
+      quadrant: "important_not_urgent",
+      status: "pending",
+    },
+    "2026-04-21"
+  );
+
+  assert.equal(form.date, "2026-04-21");
+  assert.equal(form.startTime, "09:00");
+  assert.equal(form.endTime, "10:00");
 });
 
 test("buildCalendarMonth starts on Monday and includes surrounding dates", () => {
@@ -347,6 +399,51 @@ test("expandCalendarItems expands one-time and recurring items", () => {
   assert.equal(getCalendarDayItems("2026-04-03", expanded)[0].item.status, "done");
 });
 
+test("expandCalendarItems shows multi-day items on each covered date", () => {
+  const items = [
+    {
+      id: "multi",
+      title: "旧物募集",
+      status: "todo",
+      time: { start: "2026-04-22T09:00:00+08:00", end: "2026-04-25T18:00:00+08:00" },
+      duration_days: 4,
+      recurrence: { type: "none" },
+    },
+  ];
+
+  const expanded = expandCalendarItems(items, "2026-04-21", "2026-04-26");
+
+  assert.deepEqual(getCalendarDayItems("2026-04-22", expanded).map((entry) => entry.item.id), ["multi"]);
+  assert.deepEqual(getCalendarDayItems("2026-04-23", expanded).map((entry) => entry.item.id), ["multi"]);
+  assert.deepEqual(getCalendarDayItems("2026-04-24", expanded).map((entry) => entry.item.id), ["multi"]);
+  assert.deepEqual(getCalendarDayItems("2026-04-25", expanded).map((entry) => entry.item.id), ["multi"]);
+  assert.deepEqual(getCalendarDayItems("2026-04-26", expanded).map((entry) => entry.item.id), []);
+});
+
+test("calculateTodoOverview treats multi-day items as overdue only after final day", () => {
+  const items = [
+    {
+      id: "multi",
+      status: "todo",
+      time: { start: "2026-04-22T09:00:00+08:00", end: "2026-04-25T18:00:00+08:00" },
+      duration_days: 4,
+    },
+  ];
+
+  assert.deepEqual(calculateTodoOverview(items, new Date("2026-04-23T10:00:00+08:00")), {
+    today: 0,
+    overdue: 0,
+    week: 1,
+    noTime: 0,
+  });
+  assert.deepEqual(calculateTodoOverview(items, new Date("2026-04-26T10:00:00+08:00")), {
+    today: 0,
+    overdue: 1,
+    week: 0,
+    noTime: 0,
+  });
+});
+
 test("splitTodoItems separates pending and completed items", () => {
   const grouped = splitTodoItems([
     { id: "1", status: "todo" },
@@ -375,6 +472,7 @@ test("buildTodoUpdate edits fields and toggles completion", () => {
       date: "2026-04-22",
       startTime: "13:30",
       endTime: "14:30",
+      durationDays: "1",
       recurrence: "daily",
       reminder: "60",
       location: "新地点",
@@ -393,6 +491,34 @@ test("buildTodoUpdate edits fields and toggles completion", () => {
   assert.equal(item.notes, "带资料");
   assert.equal(item.quadrant, "important_urgent");
   assert.equal(item.status, "done");
+});
+
+test("buildTodoUpdate keeps duration days in sync with end date", () => {
+  const item = buildTodoUpdate(
+    {
+      id: "todo-1",
+      title: "旧事件",
+      time: { start: "2026-04-21T09:00:00+08:00", end: "2026-04-21T10:00:00+08:00", label: "" },
+      duration_days: 1,
+      recurrence: { type: "none", label: "不重复", rrule: "" },
+      quadrant: "important_not_urgent",
+      status: "todo",
+    },
+    {
+      title: "旧事件",
+      date: "2026-04-22",
+      startTime: "09:00",
+      endTime: "18:00",
+      durationDays: "4",
+      recurrence: "none",
+      reminder: "0",
+      quadrant: "important_not_urgent",
+      status: "todo",
+    }
+  );
+
+  assert.equal(item.time.end, "2026-04-25T18:00:00+08:00");
+  assert.equal(item.duration_days, 4);
 });
 
 test("buildTodoUpdate preserves saved quadrant changes for planner sync", () => {
@@ -465,6 +591,7 @@ test("updateEditableItem updates nested editable fields", () => {
     title: "社区登记",
     start: "2026-04-20T09:00:00+08:00",
     location: "社区中心",
+    notes: "带身份证",
     materialsText: "身份证、水杯",
     contactsText: "王老师 13800138000",
   });
@@ -472,6 +599,7 @@ test("updateEditableItem updates nested editable fields", () => {
   assert.equal(edited[0].title, "社区登记");
   assert.equal(edited[0].time.start, "2026-04-20T09:00:00+08:00");
   assert.equal(edited[0].location, "社区中心");
+  assert.equal(edited[0].notes, "带身份证");
   assert.deepEqual(edited[0].materials, ["身份证", "水杯"]);
   assert.deepEqual(edited[0].contacts, [{ name: "王老师", phone: "13800138000" }]);
   assert.equal(edited[0].confidence, 0.8);

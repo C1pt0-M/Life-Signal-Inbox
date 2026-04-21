@@ -72,6 +72,41 @@ def test_validation_flags_missing_fields_low_confidence_and_conflict():
     assert report["pending_confirmations"]
 
 
+def test_validation_handles_naive_and_aware_times_without_crashing():
+    current = [
+        {
+            "id": "new-1",
+            "title": "当天待办",
+            "time": {"start": "2026-04-21", "end": "2026-04-21"},
+            "location": "教室",
+            "materials": [],
+            "contacts": [],
+            "confidence": 0.9,
+            "evidence": "旧数据只有日期",
+            "source_type": "手动添加",
+            "quadrant": "important_urgent",
+        }
+    ]
+    history = [
+        {
+            "id": "old-1",
+            "title": "已有事项",
+            "time": {"start": "2026-04-21T09:00:00+08:00", "end": "2026-04-21T10:00:00+08:00"},
+            "location": "教室",
+            "materials": [],
+            "contacts": [],
+            "confidence": 0.9,
+            "evidence": "带时区",
+            "source_type": "手动添加",
+            "quadrant": "important_urgent",
+        }
+    ]
+
+    report = validate_items(current, history)
+
+    assert isinstance(report["issues"], list)
+
+
 def test_build_ics_exports_calendar_event():
     items = [
         {

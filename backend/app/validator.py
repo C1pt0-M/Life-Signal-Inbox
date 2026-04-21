@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 def validate_items(items: list[dict], historical_items: list[dict] | None = None) -> dict:
@@ -136,12 +137,19 @@ def _check_conflicts(items: list[dict], historical_items: list[dict], issues: li
 def _interval(item: dict) -> tuple[datetime, datetime] | None:
     time_block = item.get("time", {})
     try:
-        start = datetime.fromisoformat(time_block.get("start", ""))
+        start = _parse_datetime(time_block.get("start", ""), item)
         end_raw = time_block.get("end") or time_block.get("start")
-        end = datetime.fromisoformat(end_raw)
+        end = _parse_datetime(end_raw, item)
         return start, end
     except ValueError:
         return None
+
+
+def _parse_datetime(value: str, item: dict) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo(item.get("timezone") or "Asia/Shanghai"))
+    return parsed
 
 
 def _issue_penalty(issues: list[dict]) -> int:
