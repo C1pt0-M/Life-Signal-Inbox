@@ -266,8 +266,42 @@ def test_todo_api_updates_status_and_deletes_item(tmp_path, monkeypatch):
     assert update_response.status_code == 200
     assert history_after_update[0]["title"] == "程序设计基础复习"
     assert history_after_update[0]["status"] == "done"
+    assert history_after_update[0]["completed_at"]
     assert delete_response.status_code == 200
     assert history_after_delete == []
+
+
+def test_todo_api_clears_completed_at_when_marked_back_to_todo(tmp_path, monkeypatch):
+    from app import main as main_module
+
+    test_store = SQLiteHistoryStore(tmp_path / "api-completed-at.db")
+    monkeypatch.setattr(main_module, "store", test_store)
+    client = TestClient(app)
+    item = {
+        "id": "api-item-3",
+        "title": "程序设计基础",
+        "time": {"start": "2026-04-21T09:00:00+08:00", "end": "2026-04-21T10:00:00+08:00"},
+        "location": "博达校区1号教学楼",
+        "notes": "带电脑",
+        "materials": [],
+        "contacts": [],
+        "confidence": 1,
+        "evidence": "手动添加",
+        "source_type": "手动添加",
+        "quadrant": "important_urgent",
+        "status": "done",
+    }
+    client.post("/api/todos", json={"items": [item]})
+    saved = client.get("/api/history").json()[0]
+
+    update_response = client.patch(
+        "/api/todos/api-item-3",
+        json={"item": {**saved, "status": "todo"}},
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["saved"]["status"] == "todo"
+    assert update_response.json()["saved"]["completed_at"] == ""
 
 
 def test_ocr_extract_endpoint_runs_ocr_then_structured_extraction(tmp_path, monkeypatch):

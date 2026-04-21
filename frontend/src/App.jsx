@@ -88,7 +88,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [error, setError] = useState("");
-  const [selectedDate, setSelectedDate] = useState("2026-04-20");
+  const [selectedDate, setSelectedDate] = useState(todayInputValue());
   const [calendarCursor, setCalendarCursor] = useState(() => currentCalendarCursor());
   const [selectedCalendarEntry, setSelectedCalendarEntry] = useState(null);
   const [calendarEditMode, setCalendarEditMode] = useState(false);
@@ -109,7 +109,7 @@ export default function App() {
     base_url: "https://api.openai.com/v1",
   });
   const [messages, setMessages] = useState([
-    { id: "intro", role: "assistant", text: "把通知、截图文字或需要确认的信息发给我，我会整理成待办和待确认项。" },
+    { id: "intro", role: "assistant", text: "把凌乱的通知、截图或想法发给我，我会帮你分拣成清晰的待办事项。" },
   ]);
 
   useEffect(() => {
@@ -145,7 +145,11 @@ export default function App() {
   const progress = calculateProgress(history);
   const todoOverview = useMemo(() => calculateTodoOverview(history, now), [history, now]);
   const filteredHistory = useMemo(() => filterTodoItems(history, todoFilters, now), [history, todoFilters, now]);
-  const grouped = groupByQuadrant(visibleItems);
+  const quadrantEntries = useMemo(
+    () => expandCalendarItems(visibleItems, selectedDate, selectedDate).map((entry) => entry.item),
+    [visibleItems, selectedDate]
+  );
+  const grouped = groupByQuadrant(quadrantEntries);
   const calendarDays = useMemo(() => buildCalendarMonth(calendarCursor.year, calendarCursor.month), [calendarCursor]);
   const calendarEntries = useMemo(
     () => expandCalendarItems(history, calendarDays[0]?.iso, calendarDays[calendarDays.length - 1]?.iso),
@@ -494,14 +498,20 @@ export default function App() {
           <button className={activePage === "todos" ? "active" : ""} onClick={() => setActivePage("todos")}>
             待办清单
           </button>
-          <button className={activePage === "quadrants" ? "active" : ""} onClick={() => setActivePage("quadrants")}>
+          <button
+            className={activePage === "quadrants" ? "active" : ""}
+            onClick={() => {
+              setSelectedDate(todayInputValue());
+              setActivePage("quadrants");
+            }}
+          >
             四象限规划
           </button>
           <button className={activePage === "calendar" ? "active" : ""} onClick={() => setActivePage("calendar")}>
             日历总览
           </button>
           <button className={activePage === "assistant" ? "active" : ""} onClick={() => setActivePage("assistant")}>
-            AI 助手
+            信号分拣台
           </button>
         </nav>
       </header>
@@ -744,8 +754,7 @@ function TodoOverview({ overview, activeScope, setFilters }) {
   const cards = [
     { key: "today", label: "今天", value: overview.today },
     { key: "overdue", label: "逾期", value: overview.overdue },
-    { key: "week", label: "本周", value: overview.week },
-    { key: "no_time", label: "无时间", value: overview.noTime },
+    { key: "week", label: "本周其余待办", value: overview.week },
   ];
   return (
     <section className="todo-overview">
@@ -791,7 +800,7 @@ function TodoFilterBar({ filters, setFilters }) {
         <option value="all">全部时间</option>
         <option value="today">今天</option>
         <option value="overdue">逾期</option>
-        <option value="week">本周</option>
+        <option value="week">本周其余待办</option>
         <option value="no_time">无时间</option>
       </select>
       <button className="btn-fabric btn-fabric-secondary" onClick={() => setFilters(DEFAULT_TODO_FILTERS)}>
@@ -1235,8 +1244,8 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
     <div className="assistant-layout">
       <section className="chat-panel">
         <header className="section-title">
-          <h2>AI 助手</h2>
-          <span>文本交流 / 截图提取 / 事项确认</span>
+          <h2>信号分拣台</h2>
+          <span>投放杂绪，自动织就清晰的待办清单</span>
         </header>
         <div className="message-list">
           {messages.map((message) => (
@@ -1266,8 +1275,8 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
       </section>
       <aside className="structure-panel">
         <header className="section-title">
-          <h2>结构化结果</h2>
-          <span>便于调试和确认</span>
+          <h2>分拣清单（预览）</h2>
+          <span>便于核对提取出的结构化细节</span>
         </header>
         {result ? (
           <>

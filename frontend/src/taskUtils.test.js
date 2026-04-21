@@ -27,20 +27,23 @@ import {
   updateQuadrantOverride,
 } from "./taskUtils.js";
 
-test("calculateProgress returns completed count and percentage", () => {
-  const result = calculateProgress([
-    { status: "done" },
-    { status: "todo" },
-    { status: "done" },
-  ]);
+test("calculateProgress counts only items completed today", () => {
+  const result = calculateProgress(
+    [
+      { status: "done", completed_at: "2026-04-21T09:00:00+08:00" },
+      { status: "todo" },
+      { status: "done", completed_at: "2026-04-20T19:00:00+08:00" },
+    ],
+    new Date("2026-04-21T20:13:00+08:00")
+  );
 
-  assert.deepEqual(result, { done: 2, total: 3, percent: 67 });
+  assert.deepEqual(result, { done: 1, total: 3, percent: 33 });
 });
 
 test("calculateTodoOverview counts pending time buckets", () => {
   const items = [
-    { id: "overdue", status: "todo", time: { start: "2026-04-19T09:00:00+08:00" } },
-    { id: "today", status: "todo", time: { start: "2026-04-20T13:00:00+08:00" } },
+    { id: "overdue", status: "todo", time: { start: "2026-04-20T09:00:00+08:00" } },
+    { id: "today", status: "todo", time: { start: "2026-04-20T21:00:00+08:00" } },
     { id: "week", status: "todo", time: { start: "2026-04-25T09:00:00+08:00" } },
     { id: "done-today", status: "done", time: { start: "2026-04-20T09:00:00+08:00" } },
     { id: "no-time", status: "todo", time: { start: "" } },
@@ -94,8 +97,10 @@ test("filterTodoItems filters by query status quadrant and time scope", () => {
     new Date("2026-04-20T10:00:00+08:00")
   );
 
-  assert.deepEqual(result.map((item) => item.id), ["1"]);
+  assert.deepEqual(result.map((item) => item.id), []);
   assert.deepEqual(filterTodoItems(items, { timeScope: "no_time" }, new Date("2026-04-20T10:00:00+08:00")).map((item) => item.id), ["3"]);
+  assert.deepEqual(filterTodoItems(items, { timeScope: "overdue" }, new Date("2026-04-20T10:00:00+08:00")).map((item) => item.id), ["1", "2"]);
+  assert.deepEqual(filterTodoItems(items, { timeScope: "week" }, new Date("2026-04-20T10:00:00+08:00")).map((item) => item.id), []);
 });
 
 test("groupByQuadrant keeps every quadrant available", () => {

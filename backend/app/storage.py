@@ -28,18 +28,21 @@ class SQLiteHistoryStore:
         saved: list[dict] = []
         with self._connect() as conn:
             for item in items:
+                existing = self._load_item(conn, item.get("id", ""))
                 normalized = {**item, "status": item.get("status", "todo"), "saved_at": saved_at}
+                normalized["completed_at"] = self._resolve_completed_at(normalized, existing, saved_at)
                 conn.execute(
                     """
                     INSERT INTO history_items (
-                        id, title, status, saved_at, start_time, end_time,
+                        id, title, status, saved_at, completed_at, start_time, end_time,
                         location, source_type, confidence, quadrant, item_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         title = excluded.title,
                         status = excluded.status,
                         saved_at = excluded.saved_at,
+                        completed_at = excluded.completed_at,
                         start_time = excluded.start_time,
                         end_time = excluded.end_time,
                         location = excluded.location,
@@ -53,6 +56,7 @@ class SQLiteHistoryStore:
                         normalized.get("title", ""),
                         normalized.get("status", "todo"),
                         saved_at,
+                        normalized.get("completed_at", ""),
                         normalized.get("time", {}).get("start", ""),
                         normalized.get("time", {}).get("end", ""),
                         normalized.get("location", ""),
@@ -81,6 +85,7 @@ class SQLiteHistoryStore:
                     title TEXT NOT NULL,
                     status TEXT NOT NULL,
                     saved_at TEXT NOT NULL,
+                    completed_at TEXT,
                     start_time TEXT,
                     end_time TEXT,
                     location TEXT,
@@ -91,6 +96,9 @@ class SQLiteHistoryStore:
                 )
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(history_items)").fetchall()}
+            if "completed_at" not in columns:
+                conn.execute("ALTER TABLE history_items ADD COLUMN completed_at TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_history_saved_at ON history_items(saved_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_history_start_time ON history_items(start_time)")
             conn.commit()
@@ -99,3 +107,19 @@ class SQLiteHistoryStore:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _load_item(self, conn: sqlite3.Connection, item_id: str) -> dict:
+        if not item_id:
+            return {}
+        row = conn.execute("SELECT item_json FROM history_items WHERE id = ?", (item_id,)).fetchone()
+        return json.loads(row["item_json"]) if row else {}
+
+    def _resolve_completed_at(self, item: dict, existing: dict, saved_at: str) -> str:
+        status = item.get("status", "todo")
+        if status != "done":
+            return ""
+        if item.get("completed_at"):
+            return item["completed_at"]
+        if existing.get("status") == "done" and existing.get("completed_at"):
+            return existing["completed_at"]
+        return saved_at

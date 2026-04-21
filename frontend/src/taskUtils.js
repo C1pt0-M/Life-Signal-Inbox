@@ -17,9 +17,10 @@ export const QUADRANTS = {
   },
 };
 
-export function calculateProgress(items) {
+export function calculateProgress(items, now = new Date()) {
   const total = items.length;
-  const done = items.filter((item) => item.status === "done").length;
+  const today = todayInTimezone(now);
+  const done = items.filter((item) => item.status === "done" && completedDateKey(item) === today).length;
   return {
     done,
     total,
@@ -33,14 +34,15 @@ export function calculateTodoOverview(items, now = new Date()) {
   const { start, end } = weekRangeForDate(today);
   return pending.reduce(
     (summary, item) => {
-      const date = itemDateKey(item);
-      if (!date) {
+      const startTime = itemStartDate(item);
+      if (!startTime) {
         summary.noTime += 1;
         return summary;
       }
-      if (date < today) summary.overdue += 1;
-      if (date === today) summary.today += 1;
-      if (date >= start && date <= end) summary.week += 1;
+      const date = todayInTimezone(startTime);
+      if (startTime.getTime() < now.getTime()) summary.overdue += 1;
+      else if (date === today) summary.today += 1;
+      if (date >= start && date <= end && startTime.getTime() >= now.getTime()) summary.week += 1;
       return summary;
     },
     { today: 0, overdue: 0, week: 0, noTime: 0 }
@@ -259,13 +261,14 @@ export function getDueReminders(items, now = new Date(), seenKeys = new Set()) {
 }
 
 function itemTimeScope(item, now) {
-  const date = itemDateKey(item);
-  if (!date) return "no_time";
+  const startTime = itemStartDate(item);
+  if (!startTime) return "no_time";
+  const date = todayInTimezone(startTime);
   const today = todayInTimezone(now);
   const { start, end } = weekRangeForDate(today);
-  if (date < today) return "overdue";
-  if (date === today) return "today";
+  if (startTime.getTime() < now.getTime()) return "overdue";
   if (date >= start && date <= end) return "week";
+  if (date === today) return "today";
   return "future";
 }
 
@@ -275,6 +278,21 @@ function itemDateKey(item) {
   const parsed = new Date(start);
   if (Number.isNaN(parsed.getTime())) return "";
   return todayInTimezone(parsed);
+}
+
+function completedDateKey(item) {
+  const value = item?.completed_at;
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return todayInTimezone(parsed);
+}
+
+function itemStartDate(item) {
+  const start = item?.time?.start;
+  if (!start) return null;
+  const parsed = new Date(start);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function weekRangeForDate(dateKey) {
