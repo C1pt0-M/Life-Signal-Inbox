@@ -99,6 +99,7 @@ export function buildAiConfigPayload(form) {
     provider: String(form.provider || "openai-compatible").trim(),
     api_key: String(form.api_key || "").trim(),
     model: String(form.model || "gpt-4o-mini").trim(),
+    vision_model: String(form.vision_model || "").trim(),
     base_url: String(form.base_url || "https://api.openai.com/v1")
       .trim()
       .replace(/\/+$/, ""),

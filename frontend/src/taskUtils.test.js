@@ -151,12 +151,14 @@ test("buildAiConfigPayload trims runtime AI config form values", () => {
       provider: " openai-compatible ",
       api_key: " secret ",
       model: " demo-model ",
+      vision_model: " gemini-2.5-flash ",
       base_url: " https://example.test/v1/ ",
     }),
     {
       provider: "openai-compatible",
       api_key: "secret",
       model: "demo-model",
+      vision_model: "gemini-2.5-flash",
       base_url: "https://example.test/v1",
     }
   );

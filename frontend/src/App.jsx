@@ -754,7 +754,7 @@ function TodoOverview({ overview, activeScope, setFilters }) {
   const cards = [
     { key: "today", label: "今天", value: overview.today },
     { key: "overdue", label: "逾期", value: overview.overdue },
-    { key: "week", label: "本周其余待办", value: overview.week },
+    { key: "week", label: "本周待办", value: overview.week },
   ];
   return (
     <section className="todo-overview">
@@ -800,7 +800,7 @@ function TodoFilterBar({ filters, setFilters }) {
         <option value="all">全部时间</option>
         <option value="today">今天</option>
         <option value="overdue">逾期</option>
-        <option value="week">本周其余待办</option>
+        <option value="week">本周待办</option>
         <option value="no_time">无时间</option>
       </select>
       <button className="btn-fabric btn-fabric-secondary" onClick={() => setFilters(DEFAULT_TODO_FILTERS)}>
@@ -1053,7 +1053,7 @@ function QuadrantPage({ now, selectedDate, setSelectedDate, grouped, draggedItem
           <h1>{formatFullNow(now)}</h1>
           <p>把提取后的事项按重要性和紧急度整理。</p>
         </div>
-        <label className="date-picker">
+        <label className="date-picker" style={{ background: 'transparent', boxShadow: 'none' }}>
           <span>选择规划日期</span>
           <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
         </label>
