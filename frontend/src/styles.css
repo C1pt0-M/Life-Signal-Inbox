@@ -1404,6 +1404,12 @@ dd {
   color: var(--muted);
 }
 
+.assistant-item-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .structure-panel pre,
 .json-modal pre {
   white-space: pre-wrap;

@@ -36,6 +36,7 @@ import {
   getImageFileFromClipboardEvent,
   groupByQuadrant,
   QUADRANTS,
+  removeAssistantItem,
   serializeContacts,
   serializeMaterials,
   splitTodoItems,
@@ -275,6 +276,33 @@ export default function App() {
           text: `已加入待办清单：${item.title}。`,
         },
       ]);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleAssistantDismissOne(itemId) {
+    const remaining = removeAssistantItem(result?.items || [], itemId);
+    if (!remaining.length) {
+      setResult(null);
+      return;
+    }
+    setIsLoading(true);
+    setError("");
+    try {
+      const validation = await validateTodos(remaining);
+      setResult((current) =>
+        current
+          ? {
+              ...current,
+              items: remaining,
+              context: current.context ? { ...current.context, recognized_items: remaining } : current.context,
+              validation: validation.validation,
+            }
+          : current
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -597,6 +625,7 @@ export default function App() {
             onPaste={handleAssistantPaste}
             onEditItem={handleEditItem}
             onSaveOne={handleAssistantSaveOne}
+            onDismissOne={handleAssistantDismissOne}
           />
         )}
       </section>
@@ -1220,7 +1249,7 @@ function CalendarDetailModal({ entry, editMode, editForm, setEditForm, isLoading
   );
 }
 
-function AssistantPage({ messages, result, input, setInput, isLoading, onSend, onUpload, onPaste, onEditItem, onSaveOne }) {
+function AssistantPage({ messages, result, input, setInput, isLoading, onSend, onUpload, onPaste, onEditItem, onSaveOne, onDismissOne }) {
   return (
     <div className="assistant-layout">
       <section className="chat-panel">
@@ -1268,7 +1297,7 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
             </div>
             <div className="sorting-list">
               {result.items.map((item) => (
-                <AssistantItemCard key={item.id} item={item} isLoading={isLoading} onEditItem={onEditItem} onSaveOne={onSaveOne} />
+                <AssistantItemCard key={item.id} item={item} isLoading={isLoading} onEditItem={onEditItem} onSaveOne={onSaveOne} onDismissOne={onDismissOne} />
               ))}
             </div>
           </>
@@ -1280,7 +1309,7 @@ function AssistantPage({ messages, result, input, setInput, isLoading, onSend, o
   );
 }
 
-function AssistantItemCard({ item, isLoading, onEditItem, onSaveOne }) {
+function AssistantItemCard({ item, isLoading, onEditItem, onSaveOne, onDismissOne }) {
   const [form, setForm] = useState(() => buildTodoFormState(item, todayInputValue()));
 
   useEffect(() => {
@@ -1394,10 +1423,16 @@ function AssistantItemCard({ item, isLoading, onEditItem, onSaveOne }) {
         <span>可信度 {Math.round((item.confidence || 0) * 100)}%</span>
         <span>{item.source_type}</span>
       </div>
-      <button className="btn-fabric" onClick={() => onSaveOne(item.id)} disabled={isLoading}>
-        <span className="btn-bg"></span>
-        {isLoading ? "加入中..." : "加入待办清单"}
-      </button>
+      <div className="assistant-item-actions">
+        <button className="btn-fabric" onClick={() => onSaveOne(item.id)} disabled={isLoading}>
+          <span className="btn-bg"></span>
+          {isLoading ? "加入中..." : "加入待办清单"}
+        </button>
+        <button className="btn-fabric btn-fabric-secondary" onClick={() => onDismissOne(item.id)} disabled={isLoading}>
+          <span className="btn-bg"></span>
+          取消
+        </button>
+      </div>
     </article>
   );
 }

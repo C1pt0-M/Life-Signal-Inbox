@@ -21,6 +21,7 @@ import {
   groupByQuadrant,
   getDueReminders,
   getImageFileFromClipboardEvent,
+  removeAssistantItem,
   splitTodoItems,
   serializeContacts,
   serializeMaterials,
@@ -326,6 +327,18 @@ test("buildSaveableAssistantItem marks one extracted item as todo", () => {
 
   assert.equal(item.id, "ai-1");
   assert.equal(item.status, "todo");
+});
+
+test("removeAssistantItem removes one extracted item by id", () => {
+  const items = removeAssistantItem(
+    [
+      { id: "ai-1", title: "报名确认" },
+      { id: "ai-2", title: "课程提醒" },
+    ],
+    "ai-1"
+  );
+
+  assert.deepEqual(items.map((item) => item.id), ["ai-2"]);
 });
 
 test("buildTodoFormState normalizes date-only items for editing", () => {

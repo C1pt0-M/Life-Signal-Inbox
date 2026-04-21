@@ -30,20 +30,41 @@ export function calculateProgress(items, now = new Date()) {
 
 export function calculateTodoOverview(items, now = new Date()) {
   const pending = (items || []).filter((item) => item.status !== "done");
-  const today = todayInTimezone(now);
-  const { start, end } = weekRangeForDate(today);
+  const todayStr = todayInTimezone(now);
+  const { start: weekStartStr, end: weekEndStr } = weekRangeForDate(todayStr);
+
   return pending.reduce(
     (summary, item) => {
       const startTime = itemStartDate(item);
       const endTime = itemEndDate(item) || startTime;
+
       if (!startTime || !endTime) {
         summary.noTime += 1;
         return summary;
       }
-      const date = todayInTimezone(startTime);
-      if (endTime.getTime() < now.getTime()) summary.overdue += 1;
-      else if (date === today) summary.today += 1;
-      if (date >= start && date <= end && endTime.getTime() >= now.getTime()) summary.week += 1;
+
+      const startStr = todayInTimezone(startTime);
+      const endStr = todayInTimezone(endTime);
+
+      // Overdue: The item's physical end time is in the past
+      if (endTime.getTime() < now.getTime()) {
+        summary.overdue += 1;
+      } 
+      // Today: Today falls on or between the start and end dates
+      else if (todayStr >= startStr && todayStr <= endStr) {
+        summary.today += 1;
+      }
+
+      // Week: The event's range overlaps with the current week's range
+      // AND it's not fully in the past
+      if (
+        startStr <= weekEndStr &&
+        endStr >= weekStartStr &&
+        endTime.getTime() >= now.getTime()
+      ) {
+        summary.week += 1;
+      }
+
       return summary;
     },
     { today: 0, overdue: 0, week: 0, noTime: 0 }
@@ -169,6 +190,10 @@ export function buildSaveableAssistantItem(item) {
 
 export function buildSaveableAssistantItems(items) {
   return (items || []).map(buildSaveableAssistantItem);
+}
+
+export function removeAssistantItem(items, itemId) {
+  return (items || []).filter((item) => item.id !== itemId);
 }
 
 export function buildTodoFormState(item, fallbackDate = todayInTimezone()) {
@@ -305,12 +330,20 @@ function itemTimeScope(item, now) {
   const startTime = itemStartDate(item);
   const endTime = itemEndDate(item) || startTime;
   if (!startTime || !endTime) return "no_time";
-  const date = todayInTimezone(startTime);
-  const today = todayInTimezone(now);
-  const { start, end } = weekRangeForDate(today);
+
+  const startStr = todayInTimezone(startTime);
+  const endStr = todayInTimezone(endTime);
+  const todayStr = todayInTimezone(now);
+  const { start: weekStartStr, end: weekEndStr } = weekRangeForDate(todayStr);
+
   if (endTime.getTime() < now.getTime()) return "overdue";
-  if (date >= start && date <= end) return "week";
-  if (date === today) return "today";
+  
+  // Is it happening today? (Crosses over today)
+  if (todayStr >= startStr && todayStr <= endStr) return "today";
+  
+  // Does it overlap with the current week?
+  if (startStr <= weekEndStr && endStr >= weekStartStr) return "week";
+  
   return "future";
 }
 
