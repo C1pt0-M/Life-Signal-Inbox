@@ -377,3 +377,31 @@ def test_ocr_extract_endpoint_turns_timetable_courses_into_events(tmp_path, monk
     assert program_item["notes"] == "具体节次请核对原图。"
     assert payload["json_debug"]["ocr_preprocess"]["detected_type"] == "timetable"
     assert len(payload["validation"]["issues"]) < 12
+
+
+def test_ocr_extract_endpoint_prefers_vision_model_when_configured(tmp_path, monkeypatch):
+    from app import main as main_module
+
+    monkeypatch.setattr(main_module, "store", SQLiteHistoryStore(tmp_path / "vision-history.db"))
+    monkeypatch.setattr(main_module, "get_configured_vision_client", lambda: object())
+    monkeypatch.setattr(
+        main_module,
+        "extract_with_vision",
+        lambda context, filename, content, ai_client: {
+            "context": {**context, "recognized_items": [{"id": "vision-1", "title": "视觉提取事项", "time": {"start": "", "end": "", "label": ""}, "location": "", "materials": [], "contacts": [], "evidence": "视觉模型识别", "source_type": context["source_type"], "confidence": 0.88, "quadrant": "important_not_urgent", "status": "pending"}]},
+            "items": [{"id": "vision-1", "title": "视觉提取事项", "time": {"start": "", "end": "", "label": ""}, "location": "", "materials": [], "contacts": [], "evidence": "视觉模型识别", "source_type": context["source_type"], "confidence": 0.88, "quadrant": "important_not_urgent", "status": "pending"}],
+            "json_debug": {"extractor": "vision_harness_v1"},
+        },
+    )
+    monkeypatch.setattr(main_module, "extract_text_from_image", lambda filename, content: (_ for _ in ()).throw(RuntimeError("should not call local ocr")))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ocr-extract",
+        files={"file": ("vision.png", b"image-bytes", "image/png")},
+        data={"current_date": "2026-04-21", "timezone": "Asia/Shanghai"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["title"] == "视觉提取事项"
+    assert response.json()["json_debug"]["extractor"] == "vision_harness_v1"

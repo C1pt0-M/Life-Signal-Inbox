@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .ai_extractor import get_ai_config_status, set_runtime_ai_config
+from .ai_extractor import extract_with_vision, get_ai_config_status, get_configured_vision_client, get_vision_config_status, set_runtime_ai_config
 from .extractor import build_context, extract_life_items
 from .ics import build_ics
 from .ocr import extract_text_from_image
@@ -55,6 +55,7 @@ class AIConfigRequest(BaseModel):
     api_key: str
     model: str = "gpt-4o-mini"
     base_url: str = "https://api.openai.com/v1"
+    vision_model: str = ""
 
 
 SAMPLES = [
@@ -88,7 +89,7 @@ def samples() -> list[dict]:
 
 @app.get("/api/config")
 def config() -> dict:
-    return {"ai_extractor": get_ai_config_status()}
+    return {"ai_extractor": get_ai_config_status(), "vision_extractor": get_vision_config_status()}
 
 
 @app.post("/api/config")
@@ -99,7 +100,9 @@ def update_config(request: AIConfigRequest) -> dict:
             api_key=request.api_key,
             model=request.model,
             base_url=request.base_url,
-        )
+            vision_model=request.vision_model,
+        ),
+        "vision_extractor": get_vision_config_status(),
     }
 
 
@@ -171,6 +174,64 @@ async def ocr_extract(
     timezone: str = Form("Asia/Shanghai"),
 ) -> dict:
     content = await file.read()
+    history_items = store.list_items()
+    context = build_context(
+        raw_text="",
+        source_type=source_type,
+        current_date=current_date or date.today().isoformat(),
+        timezone=timezone,
+        historical_items=history_items,
+    )
+    vision_client = get_configured_vision_client()
+    if vision_client:
+        try:
+            result = extract_with_vision(context, file.filename or "upload.png", content, vision_client)
+            validation = validate_items(result["items"], history_items)
+            return {
+                "ocr": {
+                    "filename": file.filename or "upload.png",
+                    "text": "",
+                    "confidence": 0,
+                    "provider": "vision_model",
+                    "blocks": [],
+                },
+                **result,
+                "validation": validation,
+            }
+        except Exception as exc:
+            ocr_result = extract_text_from_image(file.filename or "upload.png", content)
+            text = ocr_result.get("text", "")
+            if not text.strip():
+                return {
+                    "ocr": ocr_result,
+                    "context": context,
+                    "items": [],
+                    "json_debug": {
+                        "extractor": "vision_to_ocr_skipped",
+                        "reason": f"vision_failed:{exc}",
+                    },
+                    "validation": {
+                        "score": 0,
+                        "issues": [{"type": "empty_ocr_text", "severity": "high", "item_id": "", "message": "截图没有识别出可用于提取的文字"}],
+                        "pending_confirmations": [],
+                        "has_blockers": True,
+                    },
+                }
+            structured_ocr_result = build_ocr_structured_result(ocr_result, {**context, "raw_text": text})
+            if structured_ocr_result:
+                validation = validate_items(structured_ocr_result["items"], history_items)
+                structured_ocr_result["json_debug"]["vision_fallback"] = {"reason": str(exc)}
+                return {"ocr": ocr_result, **structured_ocr_result, "validation": validation}
+            result = _extract_text_payload(
+                text=text,
+                source_type=source_type,
+                current_date=current_date or date.today().isoformat(),
+                timezone=timezone,
+                history_items=history_items,
+            )
+            result["json_debug"]["vision_fallback"] = {"reason": str(exc)}
+            return {"ocr": ocr_result, **result}
+
     ocr_result = extract_text_from_image(file.filename or "upload.png", content)
     text = ocr_result.get("text", "")
     if not text.strip():
@@ -203,7 +264,6 @@ async def ocr_extract(
             },
         }
 
-    history_items = store.list_items()
     context = build_context(
         raw_text=text,
         source_type=source_type,

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import uuid
+from base64 import b64encode
 from datetime import date, datetime, timedelta
 from typing import Protocol
 from urllib import request
@@ -88,7 +89,24 @@ def get_ai_config_status() -> dict:
     }
 
 
-def set_runtime_ai_config(provider: str, api_key: str, model: str, base_url: str) -> dict:
+def get_vision_config_status() -> dict:
+    config = _effective_vision_config()
+    provider = config["provider"]
+    api_key_present = bool(config["api_key"])
+    enabled = provider in {"openai", "openai-compatible", "openai_compatible"} and api_key_present and bool(config["model"])
+    return {
+        "enabled": enabled,
+        "provider": provider or "local_ocr_fallback",
+        "model": config["model"] if enabled else "",
+        "base_url": config["base_url"] if enabled else "",
+        "mode": "vision_harness_v1" if enabled else "paddleocr_fallback",
+        "fallback": "paddleocr_fallback",
+        "source": config["source"] if enabled else "local_ocr_fallback",
+        "api_key_present": api_key_present,
+    }
+
+
+def set_runtime_ai_config(provider: str, api_key: str, model: str, base_url: str, vision_model: str = "") -> dict:
     _RUNTIME_AI_CONFIG.clear()
     _RUNTIME_AI_CONFIG.update(
         {
@@ -96,6 +114,7 @@ def set_runtime_ai_config(provider: str, api_key: str, model: str, base_url: str
             "api_key": api_key.strip(),
             "model": model.strip() or "gpt-4o-mini",
             "base_url": (base_url.strip() or "https://api.openai.com/v1").rstrip("/"),
+            "vision_model": vision_model.strip(),
         }
     )
     return get_ai_config_status()
@@ -103,6 +122,16 @@ def set_runtime_ai_config(provider: str, api_key: str, model: str, base_url: str
 
 def clear_runtime_ai_config() -> None:
     _RUNTIME_AI_CONFIG.clear()
+
+
+def get_configured_vision_client() -> AIClient | None:
+    config = _effective_vision_config()
+    provider = config["provider"]
+    if provider not in {"openai", "openai-compatible", "openai_compatible"}:
+        return None
+    if not config["api_key"] or not config["model"]:
+        return None
+    return OpenAICompatibleClient(api_key=config["api_key"], model=config["model"], base_url=config["base_url"])
 
 
 def _effective_ai_config() -> dict:
@@ -113,6 +142,26 @@ def _effective_ai_config() -> dict:
         "api_key": os.getenv("LIFE_SIGNAL_AI_API_KEY") or os.getenv("OPENAI_API_KEY") or "",
         "model": os.getenv("LIFE_SIGNAL_AI_MODEL", "gpt-4o-mini"),
         "base_url": os.getenv("LIFE_SIGNAL_AI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+        "source": "env",
+    }
+
+
+def _effective_vision_config() -> dict:
+    runtime_provider = _RUNTIME_AI_CONFIG.get("provider", "").strip().lower()
+    runtime_model = _RUNTIME_AI_CONFIG.get("vision_model", "").strip()
+    if runtime_provider or runtime_model:
+        return {
+            "provider": runtime_provider or _RUNTIME_AI_CONFIG.get("provider", "").strip().lower(),
+            "api_key": _RUNTIME_AI_CONFIG.get("api_key", "").strip(),
+            "model": runtime_model,
+            "base_url": _RUNTIME_AI_CONFIG.get("base_url", "https://api.openai.com/v1").rstrip("/"),
+            "source": "runtime",
+        }
+    return {
+        "provider": (os.getenv("LIFE_SIGNAL_VISION_PROVIDER") or os.getenv("LIFE_SIGNAL_AI_PROVIDER") or "").strip().lower(),
+        "api_key": os.getenv("LIFE_SIGNAL_VISION_API_KEY") or os.getenv("LIFE_SIGNAL_AI_API_KEY") or os.getenv("OPENAI_API_KEY") or "",
+        "model": os.getenv("LIFE_SIGNAL_VISION_MODEL", "").strip(),
+        "base_url": (os.getenv("LIFE_SIGNAL_VISION_BASE_URL") or os.getenv("LIFE_SIGNAL_AI_BASE_URL") or "https://api.openai.com/v1").rstrip("/"),
         "source": "env",
     }
 
@@ -152,6 +201,43 @@ def extract_with_ai(context: dict, ai_client: AIClient, max_repairs: int = 1) ->
     raise AIExtractionError("ai_repair_failed", f"AI extraction failed: {last_validation}")
 
 
+def extract_with_vision(context: dict, filename: str, content: bytes, ai_client: AIClient, max_repairs: int = 1) -> dict:
+    mime_type = _infer_mime_type(filename)
+    image_url = f"data:{mime_type};base64,{b64encode(content).decode('ascii')}"
+    attempts = 0
+    repaired = False
+    last_validation: dict | None = None
+    messages = build_vision_messages(context, image_url)
+
+    while attempts <= max_repairs:
+        attempts += 1
+        raw_output = ai_client.complete(messages)
+        model_data = parse_model_json(raw_output)
+        items = normalize_model_items(model_data.get("items", []), context)
+        validation = validate_items(items, context.get("historical_items") or [])
+        last_validation = validation
+
+        if not validation["has_blockers"] or attempts > max_repairs:
+            return {
+                "context": {**context, "recognized_items": items},
+                "items": items,
+                "json_debug": {
+                    "extractor": "vision_harness_v1",
+                    "attempts": attempts,
+                    "feedback_loop": {
+                        "repaired": repaired,
+                        "validation_score": validation["score"],
+                        "issues": validation["issues"],
+                    },
+                },
+            }
+
+        repaired = True
+        messages = build_repair_messages(context, items, validation)
+
+    raise AIExtractionError("vision_repair_failed", f"Vision extraction failed: {last_validation}")
+
+
 def build_ai_messages(context: dict) -> list[dict]:
     return [
         {
@@ -182,6 +268,44 @@ def build_ai_messages(context: dict) -> list[dict]:
                 },
                 ensure_ascii=False,
             ),
+        },
+    ]
+
+
+def build_vision_messages(context: dict, image_url: str) -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "你是 Life Signal Inbox 的图片事项提取引擎。"
+                "你接收截图，直接输出 JSON，不能输出解释文字。"
+                "优先从图片中理解时间、地点、事件、材料和联系人。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "task": "从截图中抽取生活事项",
+                            "context": context,
+                            "output_schema": _output_schema(),
+                            "rules": [
+                                "相对日期必须基于 context.current_date 和 context.timezone 解析。",
+                                "如果是课表或表格截图，不要硬拆无效事项。",
+                                "无法确认的字段留空，并降低 confidence。",
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url},
+                },
+            ],
         },
     ]
 
@@ -323,3 +447,14 @@ def _output_schema() -> dict:
             }
         ]
     }
+
+
+def _infer_mime_type(filename: str) -> str:
+    suffix = os.path.splitext(filename.lower())[1]
+    return {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+    }.get(suffix, "image/png")

@@ -1,9 +1,12 @@
 from app.ai_extractor import (
     build_ai_messages,
     clear_runtime_ai_config,
+    extract_with_vision,
     extract_with_ai,
     get_ai_config_status,
     get_configured_ai_client,
+    get_configured_vision_client,
+    get_vision_config_status,
     parse_model_json,
 )
 from app.extractor import build_context, extract_life_items
@@ -199,3 +202,77 @@ def test_config_endpoint_accepts_runtime_ai_config_without_exposing_secret(monke
     assert "dummy-runtime-key" not in str(response.json())
     assert get_configured_ai_client() is not None
     clear_runtime_ai_config()
+
+
+def test_load_env_file_configures_openai_compatible_vision_client(tmp_path, monkeypatch):
+    clear_runtime_ai_config()
+    for name in [
+        "LIFE_SIGNAL_VISION_PROVIDER",
+        "LIFE_SIGNAL_VISION_API_KEY",
+        "LIFE_SIGNAL_VISION_MODEL",
+        "LIFE_SIGNAL_VISION_BASE_URL",
+        "LIFE_SIGNAL_AI_PROVIDER",
+        "LIFE_SIGNAL_AI_API_KEY",
+        "LIFE_SIGNAL_AI_MODEL",
+        "LIFE_SIGNAL_AI_BASE_URL",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "LIFE_SIGNAL_AI_PROVIDER=openai-compatible",
+                "LIFE_SIGNAL_AI_API_KEY=test-secret-key",
+                "LIFE_SIGNAL_AI_BASE_URL=https://example.test/v1",
+                "LIFE_SIGNAL_VISION_MODEL=gemini-2.5-flash",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    load_env_file(env_file)
+    status = get_vision_config_status()
+    client = get_configured_vision_client()
+
+    assert status["enabled"] is True
+    assert status["model"] == "gemini-2.5-flash"
+    assert status["base_url"] == "https://example.test/v1"
+    assert client is not None
+    clear_runtime_ai_config()
+
+
+def test_extract_with_vision_uses_image_understanding_and_structured_output():
+    context = build_context(
+        raw_text="",
+        source_type="截图文字",
+        current_date="2026-04-21",
+        timezone="Asia/Shanghai",
+        historical_items=[],
+    )
+    client = FakeAIClient(
+        [
+            """
+            {
+              "items": [
+                {
+                  "title": "课程作业提交",
+                  "time": {"start": "2026-04-21T17:30:00+08:00", "end": "2026-04-21T18:00:00+08:00", "label": "4月21日17:30前"},
+                  "location": "学习平台",
+                  "materials": ["论文PDF"],
+                  "contacts": [{"name": "助教", "phone": ""}],
+                  "evidence": "4月21日17:30前在学习平台提交论文PDF，如有问题联系助教。",
+                  "confidence": 0.93,
+                  "quadrant": "important_urgent"
+                }
+              ]
+            }
+            """
+        ]
+    )
+
+    result = extract_with_vision(context, "notice.png", b"fake-image-bytes", client)
+
+    assert result["items"][0]["title"] == "课程作业提交"
+    assert result["json_debug"]["extractor"] == "vision_harness_v1"
+    assert client.messages[0][1]["content"][1]["type"] == "image_url"
+    assert client.messages[0][1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
